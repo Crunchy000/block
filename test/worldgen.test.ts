@@ -1,8 +1,10 @@
 import * as tf from '@tensorflow/tfjs';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, SEA_LEVEL, blockIndex, cellType } from '../src/constants';
 import {
-  GEN_BATCH, GRASS_SEED_CHANCE, WHEAT_PATCH_CHANCE, generateChunks, surfaceFeatures, type ChunkCoord,
+  Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, SEA_LEVEL, WHEAT_RIPE, blockIndex, cell, cellType,
+} from '../src/constants';
+import {
+  GEN_BATCH, WHEAT_PATCH_CHANCE, generateChunks, surfaceFeatures, type ChunkCoord,
 } from '../src/tf/worldgen';
 
 beforeAll(async () => {
@@ -27,12 +29,25 @@ describe('generateChunks', () => {
     chunks.forEach((c) => c.forEach((v, i) => {
       if (cellType(v) === Block.Wheat) expect([Block.Dirt, Block.Grass]).toContain(cellType(c[i - CHUNK_SIZE * CHUNK_SIZE]));
     }));
-    // Grass is just a few seeds, each on top of the ground with air above it.
-    expect(counts[Block.Grass]).toBeLessThan(40);
+    // Grass tops dry land: under air or wheat, never under water, never below sea level;
+    // all wheat is ripe; lava never touches water.
+    const layer = CHUNK_SIZE * CHUNK_SIZE;
     chunks.forEach((c) => c.forEach((v, i) => {
-      if (cellType(v) !== Block.Grass) return;
-      expect(cellType(c[i + CHUNK_SIZE * CHUNK_SIZE])).toBe(Block.Air);
-      expect(Math.floor(i / (CHUNK_SIZE * CHUNK_SIZE))).toBeGreaterThanOrEqual(SEA_LEVEL);
+      const t = cellType(v), above = cellType(c[i + layer] ?? 0);
+      if (t === Block.Grass) {
+        expect([Block.Air, Block.Wheat]).toContain(above);
+        expect(Math.floor(i / layer)).toBeGreaterThanOrEqual(SEA_LEVEL);
+      }
+      if (t === Block.Dirt && Math.floor(i / layer) >= SEA_LEVEL) expect(above).not.toBe(Block.Air); // no bare dirt on dry land
+      if (t === Block.Wheat) expect(v).toBe(cell(Block.Wheat, WHEAT_RIPE));
+      if (t === Block.Lava) {
+        const x = i % CHUNK_SIZE, z = Math.floor(i / CHUNK_SIZE) % CHUNK_SIZE, y = Math.floor(i / layer);
+        for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+          const xx = x + dx, yy = y + dy, zz = z + dz;
+          if (xx < 0 || xx >= CHUNK_SIZE || zz < 0 || zz >= CHUNK_SIZE || yy < 0 || yy >= CHUNK_HEIGHT) continue;
+          expect(cellType(c[i + dx + dz * CHUNK_SIZE + dy * layer])).not.toBe(Block.Water);
+        }
+      }
     }));
   });
 
@@ -62,34 +77,27 @@ describe('surfaceFeatures', () => {
     const wz = tf.range(-128, 128).reshape([1, 1, n, 1]).add(tf.zeros([1, 1, 1, n]));
     const f = surfaceFeatures(wx, wz, tf.fill([1, 1, n, n], groundY), 1337);
     return {
-      grass: Array.from(f.grassSeed.dataSync()), wheat: Array.from(f.wheat.dataSync()),
-      value: Array.from(f.wheatValue.dataSync()), n,
+      grass: Array.from(f.grass.dataSync()), wheat: Array.from(f.wheat.dataSync()), n,
     };
   };
 
-  it('seeds grass and wheat patches at about the intended rates on dry land', () => {
-    const { grass, wheat, value, n } = area(SEA_LEVEL + 3);
+  it('covers dry land in grass, with wheat patches at about the intended rate', () => {
+    const { grass, wheat, n } = area(SEA_LEVEL + 3);
     const cols = n * n;
-    const grassCount = grass.reduce((a, b) => a + b, 0), wheatCount = wheat.reduce((a, b) => a + b, 0);
-    expect(grassCount / (cols * GRASS_SEED_CHANCE)).toBeGreaterThan(0.5);
-    expect(grassCount / (cols * GRASS_SEED_CHANCE)).toBeLessThan(1.6);
+    const wheatCount = wheat.reduce((a, b) => a + b, 0);
+    expect(grass.every((v) => v)).toBe(true);
     expect(wheatCount / (cols * WHEAT_PATCH_CHANCE * 0.6)).toBeGreaterThan(0.5);
     expect(wheatCount / (cols * WHEAT_PATCH_CHANCE * 0.6)).toBeLessThan(1.6);
-    // Wheat comes in patches: most plants have another plant in their 4x4 area, and every
-    // stage from seedling to ripe shows up.
-    const stages = new Set<number>();
+    // Wheat comes in patches: most plants have another plant in their 4x4 area.
     let clustered = 0;
     for (let i = 0; i < cols; i++) {
       if (!wheat[i]) continue;
-      expect(cellType(value[i])).toBe(Block.Wheat);
-      stages.add(value[i] >> 3);
       const x = i % n, z = Math.floor(i / n), x0 = x - (x % 4), z0 = z - (z % 4);
       let others = 0;
       for (let dz = 0; dz < 4; dz++) for (let dx = 0; dx < 4; dx++) if (wheat[(z0 + dz) * n + x0 + dx]) others++;
       if (others > 1) clustered++;
     }
     expect(clustered / wheatCount).toBeGreaterThan(0.8);
-    expect(stages.size).toBe(8);
   });
 
   it('puts no plants on land under water', () => {

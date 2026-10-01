@@ -68,7 +68,7 @@ grass and wheat taking over the terrain around spawn and logs tick times.
 | Path | What |
 | --- | --- |
 | `src/constants.ts` | Chunk dims (16×16×64), block ids, cell encoding (`type + 8 * level`) |
-| `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sea-level water, 3D-noise caves, deep lava lakes, grass seeds, wild wheat |
+| `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sea-level water, 3D-noise caves, deep lava lakes, grass-topped land, ripe wild wheat |
 | `src/tf/noise.ts` | Value noise / fBm built from elementwise tensor ops |
 | `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`** (so worldgen output can be copied GPU to GPU); falls back to WebGL, then CPU; pre-compiles kernels |
 | `src/sim/rules.ts` | Every block-update rule as WGSL, shared by the GPU world and the TF.js kernel |
@@ -157,7 +157,9 @@ All cells in the region update in parallel from the previous state:
 - **Wheat** grows through stages 0–7 with a chance per tick, faster with water beside it or its soil
   (Minecraft hydrates from 4 blocks away; here it's 1, so no rule looks more than one block sideways).
   It pops off without dirt or grass under it, and flowing fluid washes it away.
-- World generation scatters a few grass seeds and small patches of wild wheat; both are also in the hotbar.
+- World generation tops dry land with grass and adds small patches of ripe wild wheat, and keeps
+  lava away from water, so a fresh world is already settled: it sleeps after its first tick and
+  only your edits wake it. Grass and wheat are also in the hotbar.
 
 ## The rules, the reference and the tests
 

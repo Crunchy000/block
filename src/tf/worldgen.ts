@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import {
-  Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, LEVEL_MUL, SEA_LEVEL, SOURCE_LEVEL, WHEAT_RIPE, cell,
+  Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, SEA_LEVEL, SOURCE_LEVEL, WHEAT_RIPE, cell,
 } from '../constants';
 import { fbm2, hash12, valueNoise3 } from './noise';
 
@@ -14,8 +14,6 @@ export const DEFAULT_SEED = 1337;
  */
 export const GEN_BATCH = 16;
 
-/** Chance that a dry surface column starts with a grass block (a few seeds to spread from). */
-export const GRASS_SEED_CHANCE = 1 / 1024;
 /** Chance that a 4x4-column area of dry land has a patch of wild wheat (at random growth stages). */
 export const WHEAT_PATCH_CHANCE = 1 / 256;
 
@@ -27,8 +25,10 @@ export const WHEAT_PATCH_CHANCE = 1 / 256;
  *   - terrain height from 2D fBm; dirt on the top 3 blocks, stone below
  *   - water sources fill everything between the terrain and SEA_LEVEL
  *   - 3D-noise caves carved under the surface; deep cave cells (y <= 10) become lava lakes
- *   - a few grass seeds: rare dry surface blocks are grass, and block updates spread it
- *   - a few patches of wild wheat on dry land, at random growth stages
+ *   - grass on top of dry land, and a few patches of ripe wild wheat
+ *   (Generated terrain is settled: nothing in it flows, spreads or grows, so freshly
+ *   loaded chunks go to sleep after one block-update tick. Water lies on the surface and
+ *   lava only in deep caves sealed under it, so the two never meet.)
  *   - y = 0 is always stone
  */
 export function generateChunksTensor(coords: ChunkCoord[], seed = DEFAULT_SEED): tf.Tensor4D {
@@ -64,7 +64,7 @@ export function generateChunksTensor(coords: ChunkCoord[], seed = DEFAULT_SEED):
     const lava = cave.logicalAnd(y.lessEqual(10));
 
     const features = surfaceFeatures(wx, wz, height, seed);
-    const grass = y.equal(height).logicalAnd(features.grassSeed);
+    const grass = y.equal(height).logicalAnd(features.grass);
     const wheat = y.equal(height.add(1)).logicalAnd(features.wheat);
 
     // Combine mutually exclusive masks: y = 0 is bedrock stone; caves are air (lava when deep).
@@ -78,7 +78,7 @@ export function generateChunksTensor(coords: ChunkCoord[], seed = DEFAULT_SEED):
       term(grass, cell(Block.Grass)),
       term(water.logicalAnd(aboveBedrock), cell(Block.Water, SOURCE_LEVEL)),
       term(lava, cell(Block.Lava, SOURCE_LEVEL)),
-      wheat.cast('int32').mul(features.wheatValue),
+      term(wheat, cell(Block.Wheat, WHEAT_RIPE)),
     ]) as tf.Tensor4D;
   });
 }
@@ -86,23 +86,21 @@ export function generateChunksTensor(coords: ChunkCoord[], seed = DEFAULT_SEED):
 /**
  * Per-column decorations on dry land (columns whose ground is at or above sea level,
  * so no water on top), from [N, 1, Z, X] column coordinates and ground height:
- * - grassSeed: the ground block is grass (a seed for grass to spread from)
- * - wheat / wheatValue: wild wheat stands on the ground, as this cell value (random stage)
+ * - grass: the ground block is grass (all dry land, so there's no bare dirt for it to spread onto)
+ * - wheat: ripe wild wheat stands on the ground
  */
 export function surfaceFeatures(wx: tf.Tensor, wz: tf.Tensor, height: tf.Tensor, seed: number) {
   // Two independent rolls per decision: one hash can't resolve such small chances in float32.
   const roll = (x: tf.Tensor, z: tf.Tensor, chance: number, s1: number, s2: number) =>
     hash12(x, z, s1).less(Math.sqrt(chance)).logicalAnd(hash12(x, z, s2).less(Math.sqrt(chance)));
   const dry = height.greaterEqual(SEA_LEVEL);
-  const grassSeed = roll(wx, wz, GRASS_SEED_CHANCE, seed % 997, (seed * 7) % 991 + 0.5).logicalAnd(dry);
+  const grass = dry;
   // Wild wheat: patches picked per 4x4 area, about 60% of a patch's columns planted.
   const ax = wx.div(4).floor(), az = wz.div(4).floor();
   const wheat = roll(ax, az, WHEAT_PATCH_CHANCE, (seed * 3) % 983, (seed * 11) % 977 + 0.25)
     .logicalAnd(hash12(wx, wz, (seed * 13) % 971 + 0.75).less(0.6))
     .logicalAnd(dry);
-  const wheatValue = hash12(wx, wz, (seed * 17) % 967).mul(WHEAT_RIPE + 1).floor().cast('int32')
-    .mul(tf.scalar(LEVEL_MUL, 'int32')).add(tf.scalar(Block.Wheat, 'int32'));
-  return { grassSeed, wheat, wheatValue };
+  return { grass, wheat };
 }
 
 /** Generate up to GEN_BATCH chunks and read them back as per-chunk byte arrays. */
