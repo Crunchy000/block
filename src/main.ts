@@ -26,7 +26,7 @@ const PICK_DISTANCE = 8;      // blocks
 const $ = (id: string) => document.getElementById(id)!;
 
 /** View distances offered on the start screen (chunks from the player's chunk). */
-const VIEW_DISTANCES = [3, 8, 16, 32, 64];
+const VIEW_DISTANCES = [3, 4, 8, 16, 32, 64];
 const VIEW_KEY = 'block.viewDistance';
 /** Block updates run this far out at most; beyond it chunks are drawn but frozen. */
 const MAX_SIMULATION_DISTANCE = 8;
@@ -52,7 +52,7 @@ function viewDistance(params: URLSearchParams, device: GPUDevice, safe: boolean)
 }
 
 /** The view-distance picker on the start screen: choosing one remembers it and reloads. */
-function showViewDistances(current: number, max: number): void {
+function showViewDistances(current: number, max: number, safe: boolean): void {
   const box = $('view-distance');
   box.replaceChildren('View distance: ');
   for (const d of [...new Set([...VIEW_DISTANCES, current])].filter((v) => v <= max).sort((a, b) => a - b)) {
@@ -69,7 +69,8 @@ function showViewDistances(current: number, max: number): void {
     });
     box.append(b, ' ');
   }
-  box.append(`chunks${max < VIEW_DISTANCES[VIEW_DISTANCES.length - 1] ? ` (this GPU holds up to ${max})` : ''}`);
+  const limit = safe ? ` (up to ${max} in safe mode)` : ` (this GPU holds up to ${max})`;
+  box.append(`chunks${max < VIEW_DISTANCES[VIEW_DISTANCES.length - 1] ? limit : ''}`);
 }
 
 async function main(): Promise<void> {
@@ -114,7 +115,7 @@ async function main(): Promise<void> {
   const activeRadius = Math.min(viewRadius, MAX_SIMULATION_DISTANCE);
   const ghostRadius = viewRadius + 1;
   log.info(`View distance ${viewRadius} (${(2 * viewRadius + 1) ** 2} chunks drawn), simulation distance ${activeRadius}`);
-  showViewDistances(viewRadius, maxViewDistance(device, safe));
+  showViewDistances(viewRadius, maxViewDistance(device, safe), safe);
   // The world lives in GPU memory, where block updates, meshing and picking run. First
   // check that this GPU computes them exactly as the reference code does; if it doesn't,
   // the world lives on the CPU with the reference code instead (slower, same game).

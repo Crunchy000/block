@@ -28,7 +28,7 @@ The bottom layer (y = 0) is unbreakable bedrock.
 Every push is built and tested by `.github/workflows/pages.yml`; pushes to the default branch are
 published to GitHub Pages at `https://<owner>.github.io/<repo>/`.
 
-**View distance:** pick 3, 8, 16, 32 or 64 chunks on the start screen (remembered; default 8, or 3 on phones), up to
+**View distance:** pick 3, 4, 8, 16, 32 or 64 chunks on the start screen (remembered; default 8, or 3 on phones), up to
 what the GPU's buffer limits hold: every loaded chunk's cells take 64 KB of one GPU buffer (about 280 MB at 32, 1.1 GB
 at 64). Block updates run within 8 chunks at most (the simulation distance); further out chunks are drawn but frozen,
 as in Minecraft. Meshes are packed into one face buffer at their real size (a few thousand faces a chunk), only chunks
