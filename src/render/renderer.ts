@@ -50,10 +50,19 @@ export class Renderer {
   private init(): void {
     const { device } = this;
     if (this.options.offscreen) {
-      this.context2d = this.canvas.getContext('2d')!;
+      const context2d = this.canvas.getContext('2d');
+      if (!context2d) throw new Error("The browser gave no 2D canvas context (canvas.getContext('2d') returned null).");
+      this.context2d = context2d;
       this.format = 'rgba8unorm';
     } else {
-      this.context = this.canvas.getContext('webgpu')!;
+      // Browsers can hand out a GPU device but no canvas to show it on (null here),
+      // for instance once they've switched WebGPU off after a GPU crash.
+      const context = this.canvas.getContext('webgpu');
+      if (!context) {
+        throw new Error("The browser gave no WebGPU canvas (canvas.getContext('webgpu') returned null), although it gave a "
+          + 'GPU device. Fully close and reopen the browser, then try again.');
+      }
+      this.context = context;
       this.format = navigator.gpu.getPreferredCanvasFormat();
       this.context.configure({ device, format: this.format, alphaMode: 'opaque' });
     }
@@ -69,8 +78,9 @@ export class Renderer {
     });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
 
-    const blockModule = device.createShaderModule({ code: blockShader });
+    const blockModule = device.createShaderModule({ label: 'blocks', code: blockShader });
     this.opaquePipeline = device.createRenderPipeline({
+      label: 'blocks (opaque)',
       layout: pipelineLayout,
       vertex: { module: blockModule, entryPoint: 'vsOpaque' },
       fragment: { module: blockModule, entryPoint: 'fs', targets: [{ format: this.format }] },
@@ -78,6 +88,7 @@ export class Renderer {
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
     });
     this.waterPipeline = device.createRenderPipeline({
+      label: 'blocks (water)',
       layout: pipelineLayout,
       vertex: { module: blockModule, entryPoint: 'vsWater' },
       fragment: {
@@ -94,8 +105,9 @@ export class Renderer {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
     });
-    const lineModule = device.createShaderModule({ code: lineShader });
+    const lineModule = device.createShaderModule({ label: 'lines', code: lineShader });
     this.linePipeline = device.createRenderPipeline({
+      label: 'lines',
       layout: pipelineLayout,
       vertex: {
         module: lineModule,

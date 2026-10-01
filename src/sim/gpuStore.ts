@@ -240,9 +240,10 @@ export class GpuStore implements CellStore {
 
   /** Compiles its shaders without blocking the page. */
   static async create(device: GPUDevice, ring: number): Promise<GpuStore> {
-    const pipeline = (code: string) =>
-      device.createComputePipelineAsync({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } });
-    const [sim, ray, mesher] = await Promise.all([pipeline(SIM_WGSL), pipeline(RAY_WGSL), GpuMesher.create(device)]);
+    const pipeline = (label: string, code: string) => device.createComputePipelineAsync({
+      label, layout: 'auto', compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
+    });
+    const [sim, ray, mesher] = await Promise.all([pipeline('block updates', SIM_WGSL), pipeline('picking', RAY_WGSL), GpuMesher.create(device)]);
     return new GpuStore(device, ring, sim, ray, mesher);
   }
 

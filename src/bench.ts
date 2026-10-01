@@ -2,6 +2,7 @@ import * as tf from '@tensorflow/tfjs';
 import {
   Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, DEFAULT_RATES, WHEAT_RIPE, blockIndex, cellLevel, cellType,
 } from './constants';
+import { log, logError } from './log';
 import { requestGpu } from './render/gpu';
 import { checkGpuStore, type StoreCheck } from './sim/check';
 import { GpuStore } from './sim/gpuStore';
@@ -44,15 +45,20 @@ const status = (text: string, error = false) => {
   const el = $('status');
   el.textContent = text;
   el.className = error ? 'error' : 'muted';
+  if (!error) log.info(text);
 };
 const progress = (fraction: number) => { $('bar').style.width = `${Math.round(fraction * 100)}%`; };
 
 /** GPU, TF.js, compiled kernels and the benchmark world: once per page. */
 function prepare(): Promise<Setup> {
   setup ??= (async () => {
+    log.info(`Block build ${__BUILD__}`);
     status('Starting WebGPU and TensorFlow.js…');
     const { device, info } = await requestGpu();
     const backend = await initTensorflow(device, info);
+    log.info(`TensorFlow.js backend: ${backend}`);
+    device.lost.then((lost) => status(`The GPU stopped working (WebGPU device lost, ${lost.reason}): ${(lost.message || 'no details').replace(/\.$/, '')}. `
+      + 'Reload to try again; if WebGPU is then unavailable, fully close and reopen the browser.', true));
     status('Compiling GPU kernels…');
     await warmUpKernels();
     const store = await GpuStore.create(device, ringSize(ACTIVE_RADIUS + 1));
@@ -185,6 +191,7 @@ async function runBenchmark(): Promise<void> {
   status('Checking the GPU world code against the reference rules…');
   const check = await checkGpuStore(s.device);
   if (!check.ok) throw new Error(`the GPU world code disagrees with the reference on this GPU (${check.detail})`);
+  log.info('GPU world check passed', check.summary);
   const previous = fusedAvailable();
   const steps = BATCHES.length * (previous ? 3 : 2) + 1;
   let done = 0;
@@ -204,6 +211,7 @@ async function runBenchmark(): Promise<void> {
   progress(1);
   status(`Done. ${s.gpu}.`);
   showResult(rows, fluids, check, s.gpu);
+  log.info('Benchmark result', $('result').innerText);
 }
 
 const rate = (r?: Rate) => r?.updatesPerSecond ?? 0;
@@ -327,8 +335,9 @@ function wire(button: HTMLButtonElement, job: () => Promise<void>): () => Promis
     try {
       await job();
     } catch (e) {
-      console.error(e);
+      logError('Benchmark failed', e);
       status(`Failed: ${e instanceof Error ? e.message : String(e)}`, true);
+      log.open();
     } finally {
       buttons.forEach((b) => { b.disabled = false; });
       $('start').textContent = 'Run again';

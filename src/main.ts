@@ -2,6 +2,7 @@ import * as tf from '@tensorflow/tfjs';
 import {
   ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, DEFAULT_RATES, SOURCE_LEVEL, BLOCK_NAMES, cell,
 } from './constants';
+import { log, logError } from './log';
 import { Controls } from './player/controls';
 import { TouchControls } from './player/touchControls';
 import type { RayHit } from './player/raycast';
@@ -24,28 +25,37 @@ const PICK_DISTANCE = 8;      // blocks
 const $ = (id: string) => document.getElementById(id)!;
 
 async function main(): Promise<void> {
+  const startedAt = performance.now();
   const canvas = $('gpu') as HTMLCanvasElement;
   const overlay = $('overlay'), hud = $('hud'), errorBox = $('error');
   let statusText = '';
-  const setStatus = (text: string) => {
-    if (text !== statusText) $('status').textContent = statusText = text;
+  // Startup steps go into the page log too (the Log button), so a failure shows where it happened.
+  const setStatus = (text: string, logIt = true) => {
+    if (text === statusText) return;
+    $('status').textContent = statusText = text;
+    if (logIt) log.info(text);
   };
   let lastError = '';
   const showError = (text: string) => {
     lastError = text;
     errorBox.textContent = text;
   };
+  /** The GPU device was lost: nothing more can run, the start screen says so. */
+  let gpuLost = false;
+  let worldReady = false;
 
+  log.info(`Block build ${__BUILD__}`);
   setStatus('Starting WebGPU…');
   const params = new URLSearchParams(location.search);
   const renderer = await Renderer.create(canvas, { offscreen: params.has('offscreen') });
   setStatus('Starting TensorFlow.js…');
   let tfBackend = await initTensorflow(renderer.device, renderer.adapterInfo);
+  log.info(`TensorFlow.js backend: ${tfBackend}`);
   setStatus(`Compiling GPU kernels (${tfBackend})…`);
   try {
     await warmUpKernels();
   } catch (e) {
-    console.warn('kernel warm-up failed; kernels will compile on first use', e);
+    logError('Kernel warm-up failed (kernels will compile on first use)', e);
   }
   const { device } = renderer;
   const activeRadius = params.has('radius') ? Math.max(1, Math.floor(Number(params.get('radius')))) : ACTIVE_RADIUS;
@@ -54,23 +64,29 @@ async function main(): Promise<void> {
   // check that this GPU computes them exactly as the reference code does; if it doesn't,
   // the world lives on the CPU with the reference code instead (slower, same game).
   setStatus('Checking the GPU world code…');
-  const check = await checkGpuStore(device).catch((e: unknown) => ({ ok: false, summary: '', detail: String(e) }));
-  if (!check.ok) console.warn('The GPU world code disagrees with the reference; keeping the world on the CPU.', check.detail);
+  const check = await checkGpuStore(device).catch((e: unknown) => ({ ok: false, summary: '', detail: log.describe(e).join('\n') }));
+  if (check.ok) log.info('GPU world check passed', check.summary);
+  else log.warn('GPU world check failed: the world stays on the CPU', check.detail);
+  setStatus('Setting up the world…');
   const store: CellStore = check.ok && !params.has('cpu')
     ? await GpuStore.create(device, ringSize(ghostRadius))
     : new CpuStore(ringSize(ghostRadius));
+  log.info(store instanceof GpuStore ? 'World: in GPU memory' : 'World: on the CPU');
   const meshes = new MeshPool(device, meshSlotCount(activeRadius));
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
   let switching = false;
   const onTfError = (what: string) => (e: unknown) => {
-    console.error(`${what} failed on tfjs backend ${tfBackend}`, e);
+    logError(`${what} failed on TF.js backend ${tfBackend}`, e);
     showError(`${what} failed on ${tfBackend}: ${e instanceof Error ? e.message : String(e)}`);
     if (switching) return;
     switching = true;
     fallbackBackend()
       .then(async (name) => {
-        if (name !== tfBackend) showError(`${lastError} (switched TensorFlow.js to ${name})`);
+        if (name !== tfBackend) {
+          showError(`${lastError} (switched TensorFlow.js to ${name})`);
+          log.warn(`Switched TensorFlow.js from ${tfBackend} to ${name}`);
+        }
         tfBackend = name;
         await warmUpKernels().catch(() => {});
       })
@@ -107,6 +123,10 @@ async function main(): Promise<void> {
   let startPointer = 'mouse';
   overlay.addEventListener('pointerdown', (e) => { startPointer = e.pointerType; });
   overlay.addEventListener('click', (e) => {
+    if (gpuLost) {
+      location.reload();
+      return;
+    }
     const type = (e as PointerEvent).pointerType || startPointer;
     if ((type === 'touch' || type === 'pen') && document.fullscreenEnabled && !document.fullscreenElement) {
       // More room on phones, and no accidental pull-to-refresh. Unsupported on iPhone; that's fine.
@@ -115,6 +135,21 @@ async function main(): Promise<void> {
     controls.start(type);
   });
   const touchFirst = matchMedia('(pointer: coarse)').matches;
+
+  // A lost GPU device (a GPU crash or hang, or the browser reclaiming it) can't be used again:
+  // stop, explain on the start screen, and open the log (gpu.ts has logged the browser's reason).
+  device.lost.then((info) => {
+    gpuLost = true;
+    if (document.pointerLockElement) document.exitPointerLock();
+    if (controls.touchPlaying) controls.stopTouch();
+    overlay.classList.remove('hidden');
+    document.body.classList.remove('playing');
+    touchUI.setVisible(false);
+    setStatus('The GPU stopped working', false);
+    showError(`WebGPU device lost (${info.reason}): ${(info.message || 'no details').replace(/\.$/, '')}. Tap or click to reload; `
+      + 'if WebGPU is then unavailable, fully close and reopen the browser.');
+    log.open();
+  });
 
   // Console / automation handle, e.g. block.world.setCell(x, y, z, value).
   Object.assign(window, { block: { world, sim, controls, renderer, store, tf } });
@@ -219,6 +254,7 @@ async function main(): Promise<void> {
   };
 
   const frame = (now: number) => {
+    if (gpuLost) return; // nothing more the GPU can do: stop here, with the start screen explaining
     requestAnimationFrame(frame);
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
@@ -236,14 +272,18 @@ async function main(): Promise<void> {
     if (!paused && now - lastTick >= TICK_MS && !sim.busy) {
       lastTick = now;
       sim.tick().catch((e: unknown) => {
-        console.error('block update failed', e);
+        logError('Block update failed', e);
         showError(`block update failed: ${e instanceof Error ? e.message : String(e)}`);
       });
     }
     world.remesh(meshes);
 
     const { loaded, total } = world.haloProgress();
-    setStatus(loaded < total ? `Generating world… ${loaded} / ${total} chunks` : `${touchFirst ? 'Tap' : 'Click'} anywhere to play`);
+    if (loaded === total && !worldReady) {
+      worldReady = true;
+      log.info(`World ready: ${total} chunks, ${((performance.now() - startedAt) / 1000).toFixed(1)} s after start`);
+    }
+    setStatus(loaded < total ? `Generating world… ${loaded} / ${total} chunks` : `${touchFirst ? 'Tap' : 'Click'} anywhere to play`, false);
 
     const fogDistance = world.activeRadius * CHUNK_SIZE + 8;
     const proj = perspective((70 * Math.PI) / 180, renderer.aspect, 0.1, fogDistance * 1.5);
@@ -268,7 +308,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((e) => {
-  console.error(e);
+  logError('Failed to start', e);
   $('error').textContent = String(e instanceof Error ? e.message : e);
   $('status').textContent = 'Failed to start';
+  log.open();
 });

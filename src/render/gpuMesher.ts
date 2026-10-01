@@ -124,8 +124,8 @@ export class GpuMesher {
   private constructor(private readonly device: GPUDevice, private readonly pipeline: GPUComputePipeline) {}
 
   static async create(device: GPUDevice): Promise<GpuMesher> {
-    const module = device.createShaderModule({ code: MESH_WGSL });
-    return new GpuMesher(device, await device.createComputePipelineAsync({ layout: 'auto', compute: { module, entryPoint: 'main' } }));
+    const module = device.createShaderModule({ label: 'meshing', code: MESH_WGSL });
+    return new GpuMesher(device, await device.createComputePipelineAsync({ label: 'meshing', layout: 'auto', compute: { module, entryPoint: 'main' } }));
   }
 
   mesh(cells: GPUBuffer, jobs: MeshJob[], pool: MeshPool): void {

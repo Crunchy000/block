@@ -34,6 +34,15 @@ URL params: `?radius=N` active radius in chunks (default 3) · `pos=x,y,z` · `y
 texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available) ·
 `cpu` (keep the world on the CPU with the reference code instead, for comparison).
 
+**If something goes wrong:** the **Log** button (top right on the start screen, and at the top whenever
+an error has happened) shows the page log, with **Copy** and **Share** buttons for sending it from a phone.
+It records the startup steps, the browser and GPU (adapter, features and limits), and everything that goes
+wrong: errors with their stack traces, failed promises, console errors and warnings, WebGPU validation and
+shader-compile errors, and a lost GPU device with the browser's reason. It's a plain script (`public/log.js`)
+loaded before the game, so it also catches errors that stop the game loading, and it keeps the previous
+visits' logs, since a GPU crash can force a reload. If the GPU device is lost the game stops and says so.
+After a GPU crash, browsers can switch WebGPU off for a while: fully close and reopen the browser.
+
 **Benchmark:** the start screen's *Benchmark this device* button opens `bench.html`
 (`https://<owner>.github.io/<repo>/bench.html`), which measures **block updates per second** on your GPU
 with the game's code. One block update is one cell's next state for one tick. Press *Start benchmark*:
