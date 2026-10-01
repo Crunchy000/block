@@ -35,6 +35,14 @@ as in Minecraft. Meshes are packed into one face buffer at their real size (a fe
 in the camera's view are drawn, and depth is reversed with a float depth buffer so distant terrain stays steady. The
 game is playable as soon as the area around you is loaded; the distance keeps loading, nearest first.
 
+**Far terrain** (on by default; switch it off on the start screen or with `?far=0`): beyond the chunks, the land
+is drawn out to 2 km as one low-detail height field, in the spirit of Distant Horizons' level-of-detail chunks. The
+ground's height is a formula (`terrainHeight` in `src/tf/worldgen.ts`, the one generation uses), so the far terrain
+needs no chunks: it samples the formula on a grid around you (points 4 blocks apart nearby, up to 64 apart far away,
+about 37,000 in all, 1.3 MB), recentred every 64 blocks you travel, and draws grass, bare slopes and sea with the
+blocks' lighting and fog. It isn't drawn where real chunks are. It has no caves, plants or edits, only the shape of
+the land, and plain vertex buffers, so safe mode shows it too (`src/world/farTerrain.ts`).
+
 **Safe mode** (`?safe`, linked from the start screen): the world on the CPU and the previous renderer (meshes built
 on the CPU, plain indexed draws), for GPUs that crash on the GPU world, as an Adreno 6xx phone on Android 10 did.
 
@@ -69,6 +77,7 @@ grass and wheat taking over the terrain around spawn and logs tick times.
 | --- | --- |
 | `src/constants.ts` | Chunk dims (16×16×64), block ids, cell encoding (`type + 8 * level`) |
 | `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sea-level water, 3D-noise caves, deep lava lakes, grass-topped land, ripe wild wheat |
+| `src/world/farTerrain.ts` | Far terrain: the ground-height formula sampled on a widening grid around the player, drawn beyond the chunks |
 | `src/tf/noise.ts` | Value noise / fBm built from elementwise tensor ops |
 | `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`** (so worldgen output can be copied GPU to GPU); falls back to WebGL, then CPU; pre-compiles kernels |
 | `src/sim/rules.ts` | Every block-update rule as WGSL, shared by the GPU world and the TF.js kernel |

@@ -46,10 +46,7 @@ export function generateChunksTensor(coords: ChunkCoord[], seed = DEFAULT_SEED):
     const wz = oz.add(lz).add(tf.zeros([1, 1, 1, S]));
     const y = tf.range(0, H).reshape([1, H, 1, 1]);
 
-    // Height: broad continents + rolling hills.
-    const continents = fbm2(wx, wz, seed, 128, 3);
-    const hills = fbm2(wx, wz, seed + 17, 32, 4);
-    const height = continents.sub(0.5).mul(36).add(hills.sub(0.5).mul(14)).add(SEA_LEVEL + 2).floor();
+    const height = terrainHeight(wx, wz, seed);
 
     const ground = y.lessEqual(height);
     const dirt = ground.logicalAnd(y.greater(height.sub(3)));
@@ -101,6 +98,19 @@ export function surfaceFeatures(wx: tf.Tensor, wz: tf.Tensor, height: tf.Tensor,
     .logicalAnd(hash12(wx, wz, (seed * 13) % 971 + 0.75).less(0.6))
     .logicalAnd(dry);
   return { grass, wheat };
+}
+
+/**
+ * The height of the ground (its top block's y) at world columns (wx, wz): broad continents
+ * plus rolling hills. Float tensors of any (equal or broadcastable) shapes. The far terrain
+ * (world/farTerrain.ts) samples it too, so it lines up with generated chunks.
+ */
+export function terrainHeight(wx: tf.Tensor, wz: tf.Tensor, seed = DEFAULT_SEED): tf.Tensor {
+  return tf.tidy(() => {
+    const continents = fbm2(wx, wz, seed, 128, 3);
+    const hills = fbm2(wx, wz, seed + 17, 32, 4);
+    return continents.sub(0.5).mul(36).add(hills.sub(0.5).mul(14)).add(SEA_LEVEL + 2).floor();
+  });
 }
 
 /** Generate up to GEN_BATCH chunks and read them back as per-chunk byte arrays. */

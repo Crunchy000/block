@@ -154,6 +154,65 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
+/**
+ * Far terrain (world/farTerrain.ts): a height field of plain vertex positions, flat shaded
+ * from screen-space derivatives. Grass on land (bare dirt on steep slopes), water at the
+ * sea's surface, the blocks' sun and fog. Not drawn where real chunks are.
+ */
+export const farShader = /* wgsl */ `
+${uniforms}
+struct Far {
+  near: vec4f,   // xz min, xz max of the area the real chunks cover
+  sea: vec4f,    // x = y of the sea's surface
+};
+@group(0) @binding(1) var<uniform> far: Far;
+
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) world: vec3f,
+};
+
+@vertex
+fn vs(@location(0) pos: vec3f) -> VSOut {
+  var o: VSOut;
+  o.pos = u.viewProj * vec4f(pos, 1.0);
+  o.world = pos;
+  return o;
+}
+
+fn hash2(p: vec2f) -> f32 {
+  return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453);
+}
+
+@fragment
+fn fs(in: VSOut) -> @location(0) vec4f {
+  // (Derivatives first: they need every pixel of the quad, so before any discard.)
+  var normal = normalize(cross(dpdx(in.world), dpdy(in.world)));
+  if (normal.y < 0.0) { normal = -normal; }
+  if (all(in.world.xz >= far.near.xy) && all(in.world.xz < far.near.zw)) { discard; }
+
+  let n = hash2(floor(in.world.xz / 4.0));
+  var base: vec3f;
+  if (in.world.y <= far.sea.x + 0.01) {
+    base = vec3f(0.2, 0.38, 0.74); // about what translucent water over a sea bed looks like
+    normal = vec3f(0.0, 1.0, 0.0);
+  } else {
+    let green = vec3f(0.36, 0.62, 0.22) * (0.85 + 0.2 * n);
+    let dirt = vec3f(0.55, 0.38, 0.24) * (0.85 + 0.2 * n);
+    base = mix(dirt, green, smoothstep(0.55, 0.8, normal.y));
+  }
+
+  let sun = normalize(vec3f(0.4, 0.85, 0.3));
+  let diffuse = max(dot(normal, sun), 0.0);
+  var lit = base * (0.6 + 0.4 * diffuse);
+
+  let dist = distance(in.world, u.camPos.xyz);
+  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, 1.0);
+  lit = mix(lit, u.sky.rgb, fog);
+  return vec4f(lit, 1.0);
+}
+`;
+
 export const lineShader = /* wgsl */ `
 ${uniforms}
 

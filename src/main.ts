@@ -17,6 +17,7 @@ import { Simulation } from './sim/simulation';
 import { ringSize, type CellStore } from './sim/store';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
 import { HOTBAR_BLOCKS, createHotbar } from './ui/hotbar';
+import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
 import { generateMissing } from './world/loader';
 import { World, meshSlotCount } from './world/world';
 
@@ -28,6 +29,7 @@ const $ = (id: string) => document.getElementById(id)!;
 /** View distances offered on the start screen (chunks from the player's chunk). */
 const VIEW_DISTANCES = [3, 4, 8, 16, 32, 64];
 const VIEW_KEY = 'block.viewDistance';
+const FAR_KEY = 'block.farTerrain';
 /** Block updates run this far out at most; beyond it chunks are drawn but frozen. */
 const MAX_SIMULATION_DISTANCE = 8;
 
@@ -49,6 +51,33 @@ function viewDistance(params: URLSearchParams, device: GPUDevice, safe: boolean)
   try { stored = localStorage.getItem(VIEW_KEY); } catch { /* storage blocked */ }
   const asked = Number(params.get('radius') ?? stored ?? (matchMedia('(pointer: coarse)').matches ? ACTIVE_RADIUS : 8));
   return Math.min(maxViewDistance(device, safe), Math.max(1, Math.floor(asked) || ACTIVE_RADIUS));
+}
+
+/** ?far=0/1, else the start screen's choice, else on. */
+function farTerrainOn(params: URLSearchParams): boolean {
+  let stored: string | null = null;
+  try { stored = localStorage.getItem(FAR_KEY); } catch { /* storage blocked */ }
+  return (params.get('far') ?? stored ?? '1') !== '0';
+}
+
+/** The far terrain switch on the start screen, under the view distances: remembered, and reloads. */
+function showFarTerrain(on: boolean): void {
+  const box = $('view-distance');
+  box.append(document.createElement('br'), 'Far terrain: ');
+  for (const [label, value] of [['on', true], ['off', false]] as const) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.className = value === on ? 'chosen' : '';
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try { localStorage.setItem(FAR_KEY, value ? '1' : '0'); } catch { /* storage blocked */ }
+      const url = new URL(location.href);
+      if (url.searchParams.has('far')) url.searchParams.set('far', value ? '1' : '0');
+      if (value !== on) location.href = url.toString();
+    });
+    box.append(b, ' ');
+  }
 }
 
 /** The view-distance picker on the start screen: choosing one remembers it and reloads. */
@@ -116,6 +145,8 @@ async function main(): Promise<void> {
   const ghostRadius = viewRadius + 1;
   log.info(`View distance ${viewRadius} (${(2 * viewRadius + 1) ** 2} chunks drawn), simulation distance ${activeRadius}`);
   showViewDistances(viewRadius, maxViewDistance(device, safe), safe);
+  const farOn = farTerrainOn(params);
+  showFarTerrain(farOn);
   // The world lives in GPU memory, where block updates, meshing and picking run. First
   // check that this GPU computes them exactly as the reference code does; if it doesn't,
   // the world lives on the CPU with the reference code instead (slower, same game).
@@ -131,6 +162,9 @@ async function main(): Promise<void> {
     : new CpuStore(ringSize(ghostRadius));
   log.info(store instanceof GpuStore ? 'World: in GPU memory' : 'World: on the CPU');
   const meshes = safe ? new ClassicMeshes(device, meshSlotCount(viewRadius)) : new MeshPool(device, meshSlotCount(viewRadius));
+  // The land beyond the chunks, out to at least 2 km (1 km past the chunks at long view distances).
+  const far = farOn ? new FarTerrain(device, Math.max(2048, (viewRadius + 1) * CHUNK_SIZE + 1024)) : undefined;
+  if (far) log.info(`Far terrain: out to ${far.extent} blocks, ${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB`);
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
   let switching = false;
@@ -350,13 +384,18 @@ async function main(): Promise<void> {
     const play = `${touchFirst ? 'Tap' : 'Click'} anywhere to play`;
     setStatus(!world.simReady() ? `Generating world… ${loaded} / ${total} chunks` : loaded < total ? `${play} (loading ${loaded} / ${total} chunks)` : play, false);
 
-    const fogDistance = world.viewRadius * CHUNK_SIZE + 8;
+    far?.update(eye[0], eye[2]);
+    const fogDistance = far ? far.extent : world.viewRadius * CHUNK_SIZE + 8;
     const proj = perspective((70 * Math.PI) / 180, renderer.aspect, 0.1);
     const viewProj = multiply(proj, fpsView(eye, controls.yaw, controls.pitch));
     // Only chunks the camera can see.
     const inView = frustum(viewProj);
     const draws = world.draws((x, z) => inView([x * CHUNK_SIZE, 0, z * CHUNK_SIZE], [(x + 1) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 1) * CHUNK_SIZE]));
-    renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws);
+    const { cx: wcx, cz: wcz } = world.window, vr = world.viewRadius;
+    renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws, far?.ready ? {
+      vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE,
+      near: [(wcx - vr) * CHUNK_SIZE, (wcz - vr) * CHUNK_SIZE, (wcx + vr + 1) * CHUNK_SIZE, (wcz + vr + 1) * CHUNK_SIZE],
+    } : undefined);
 
     const saved = world.savedCount(), counts = world.counts();
     hud.textContent = [
@@ -368,6 +407,7 @@ async function main(): Promise<void> {
         ? `world: in GPU memory (${(store.bytes / 2 ** 20).toFixed(1)} MB, meshes ${meshes instanceof MeshPool ? (meshes.usage.used * 4 / 2 ** 20).toFixed(1) : '?'} MB); ` +
           `a tick reads back ${sim.lastBatch * 4} bytes of flags`
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
+      far ? `far terrain: out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
       `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),

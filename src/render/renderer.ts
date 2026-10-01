@@ -2,12 +2,23 @@ import type { ChunkDraw } from '../world/world';
 import { requestGpu } from './gpu';
 import { ClassicMeshes, VERTEX_FLOATS } from './classicMeshes';
 import type { MeshPool } from './meshPool';
-import { blockShader, classicBlockShader, lineShader } from './shaders';
+import { blockShader, classicBlockShader, farShader, lineShader } from './shaders';
 
 /** Reversed depth (math.ts perspective): float depth keeps precision at any view distance. */
 const DEPTH: GPUTextureFormat = 'depth32float';
 
 export const SKY: [number, number, number] = [0.55, 0.75, 0.95];
+
+/** The far terrain to draw (world/farTerrain.ts): an indexed triangle list of positions. */
+export interface FarDraw {
+  vertex: GPUBuffer;
+  index: GPUBuffer;
+  indexCount: number;
+  /** x0, z0, x1, z1: the area the real chunks cover, where the far terrain isn't drawn. */
+  near: [number, number, number, number];
+  /** The y of the sea's surface. */
+  seaY: number;
+}
 
 export interface RendererOptions {
   /**
@@ -42,6 +53,9 @@ export class Renderer {
   private waterPipeline!: GPURenderPipeline;
   private linePipeline!: GPURenderPipeline;
   private lineBuffer?: GPUBuffer;
+  private farPipeline!: GPURenderPipeline;
+  private farUniforms!: GPUBuffer;
+  private farGroup!: GPUBindGroup;
 
   private constructor(
     readonly device: GPUDevice,
@@ -129,6 +143,25 @@ export class Renderer {
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'greater' },
     });
+    // Far terrain: its own small uniform block beside the shared one; plain vertex buffers, so safe mode draws it too.
+    this.farUniforms = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const farLayout = device.createBindGroupLayout({
+      entries: [uniformEntry, { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: {} }],
+    });
+    this.farGroup = device.createBindGroup({
+      layout: farLayout,
+      entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }, { binding: 1, resource: { buffer: this.farUniforms } }],
+    });
+    const farModule = device.createShaderModule({ label: 'far terrain', code: farShader });
+    this.farPipeline = device.createRenderPipeline({
+      label: 'far terrain',
+      layout: device.createPipelineLayout({ bindGroupLayouts: [farLayout] }),
+      vertex: { module: farModule, entryPoint: 'vs', buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x3' }] }] },
+      fragment: { module: farModule, entryPoint: 'fs', targets: [{ format: this.format }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' },
+    });
+
     const lineModule = device.createShaderModule({ label: 'lines', code: lineShader });
     this.linePipeline = device.createRenderPipeline({
       label: 'lines',
@@ -209,11 +242,12 @@ export class Renderer {
 
   /**
    * Draw the chunks in `draws` from their meshes in `pool` (indirect draws: the counts
-   * stay on the GPU), plus lines: interleaved [x, y, z, r, g, b] pairs for a line list.
+   * stay on the GPU), plus lines: interleaved [x, y, z, r, g, b] pairs for a line list,
+   * and the far terrain beyond them if given.
    */
   render(
     viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>,
-    pool: MeshPool | ClassicMeshes, draws: ChunkDraw[],
+    pool: MeshPool | ClassicMeshes, draws: ChunkDraw[], far?: FarDraw,
   ): void {
     // A canvas throttles us to what the GPU can present; offscreen nothing does, and on a
     // slow GPU frames would pile up in the queue ahead of the block-update work. Skip
@@ -232,6 +266,7 @@ export class Renderer {
       this.lineBuffer = device.createBuffer({ size: Math.max(lines.byteLength, 1 << 16), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     }
     if (lines.length > 0) device.queue.writeBuffer(this.lineBuffer!, 0, lines);
+    if (far) device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([...far.near, far.seaY, 0, 0, 0]));
 
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
@@ -261,6 +296,15 @@ export class Renderer {
     };
     pass.setPipeline(this.opaquePipeline);
     for (const d of draws) drawMesh(d, false);
+
+    if (far) {
+      pass.setPipeline(this.farPipeline);
+      pass.setBindGroup(0, this.farGroup);
+      pass.setVertexBuffer(0, far.vertex);
+      pass.setIndexBuffer(far.index, 'uint32');
+      pass.drawIndexed(far.indexCount);
+      pass.setBindGroup(0, this.groupFor(pool));
+    }
 
     if (lines.length > 0) {
       pass.setPipeline(this.linePipeline);
