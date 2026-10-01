@@ -1,23 +1,28 @@
-import { CHUNK_VOLUME, chunkKey } from '../constants';
+import { chunkKey } from '../constants';
 
 /**
- * - ghost:  generated, kept as read-only neighbour data (halo around the active area)
- * - active: simulated by block updates and rendered
+ * - ghost:  loaded as read-only neighbour data (the halo around the active area)
+ * - active: simulated by block updates and drawn
  */
 export type ChunkState = 'ghost' | 'active';
 
+/** A chunk in the halo: bookkeeping only. Its cells live in the store (GPU memory in the game), in `slot`. */
 export class Chunk {
   readonly key: string;
   state: ChunkState = 'ghost';
-  /** Bumped whenever the data changes; the renderer remeshes when it differs from meshedVersion. */
+  /** Its cells are in the store (generated, or restored after an earlier visit). */
+  loaded = false;
+  /** Generating or restoring. */
+  loading = false;
+  /** Bumped whenever its cells (or the neighbouring cells its mesh depends on) change; remeshed when it differs from meshedVersion. */
   version = 0;
   meshedVersion = -1;
-  /** Edited or simulated since generation: keep in memory when it leaves the halo. */
+  /** Where its mesh goes while it's active (-1 otherwise). */
+  meshSlot = -1;
+  /** Edited or simulated since generation: saved when it leaves the halo, restored when it comes back. */
   modified = false;
-  /** Contains plants (grass, primed dirt, wheat), so block updates need the plant rules here. */
-  plants = false;
 
-  constructor(readonly cx: number, readonly cz: number, readonly data: Uint8Array = new Uint8Array(CHUNK_VOLUME)) {
+  constructor(readonly cx: number, readonly cz: number, readonly slot: number) {
     this.key = chunkKey(cx, cz);
   }
 }

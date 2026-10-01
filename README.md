@@ -1,13 +1,15 @@
 # Block
 
-A Minecraft-style voxel world where **world generation and block updates run in
-TensorFlow.js** and rendering is a hand-written **WebGPU** renderer.
+A Minecraft-style voxel world: **world generation runs in TensorFlow.js**, and the world then
+**lives in GPU memory**, where block updates, meshing and picking run as WebGPU compute shaders
+and a hand-written **WebGPU** renderer draws it. The CPU keeps only bookkeeping (which chunks are
+where, which are awake); per tick it gets back a few bytes of flags.
 
 ```
 npm install
 npm run dev        # http://localhost:5173 — needs a WebGPU browser (Chrome/Edge 113+, Safari 26+, Firefox 141+)
-npm test           # TF.js logic on the CPU backend (worldgen, block updates, meshing, halo)
-npm run test:gpu   # the fused WebGPU rules kernel vs the reference, in headless Chromium (Playwright)
+npm test           # the world on the CPU reference store, rules, meshing, worldgen (Node, TF.js CPU backend)
+npm run test:gpu   # everything on the GPU vs the reference, in headless Chromium with WebGPU (Playwright)
 npm run build
 ```
 
@@ -29,71 +31,97 @@ published to GitHub Pages at `https://<owner>.github.io/<repo>/`.
 URL params: `?radius=N` active radius in chunks (default 3) · `pos=x,y,z` · `yaw=` / `pitch=` (radians) ·
 `chunks` (outlines on) · `spread=` grass spread chance per tick (default 1/16, 0 = never) ·
 `grow=` wheat growth chance per tick (default 1/40, 1/12 next to water) · `offscreen` (render to a
-texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available).
+texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available) ·
+`cpu` (keep the world on the CPU with the reference code instead, for comparison).
 
 **Benchmark:** the start screen's *Benchmark this device* button opens `bench.html`
 (`https://<owner>.github.io/<repo>/bench.html`), which measures **block updates per second** on your GPU
-with the game's code. One block update is one cell's next state for one tick (ghost border cells don't
-count). Press *Start benchmark*: it runs the game's tick loop (pack chunks with their ghost borders,
-TF.js step with every rule, read back, compare) for batches of 1 to 100 chunks, reports the best rate and
-how many chunks that could keep updating at 5 ticks per second, a "GPU only" rate with the state kept on
-the GPU between steps (the ceiling without per-tick data movement), and the rate with fluid rules only.
-*Run takeover* simulates grass and wheat taking over the terrain around spawn and logs tick times.
+with the game's code. One block update is one cell's next state for one tick. Press *Start benchmark*:
+it times the game's tick loop (chunks updated in GPU memory, waiting for their flags each tick) for 1 to
+200 different chunks per tick, and reports the best rate, how many chunks that could keep updating at
+5 ticks per second, the "GPU only" rate (ticks issued back to back), the rate with fluid rules only, and
+the **previous design** for comparison: the world on the CPU, each tick packing chunks with their ghost
+borders, running the same rules as a TF.js kernel and reading every cell back. *Run takeover* simulates
+grass and wheat taking over the terrain around spawn and logs tick times.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `src/constants.ts` | Chunk dims (16×16×64), block ids, cell encoding (`type + 8 * fluidLevel`) |
-| `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sea-level water, 3D-noise caves, deep lava lakes |
+| `src/constants.ts` | Chunk dims (16×16×64), block ids, cell encoding (`type + 8 * level`) |
+| `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sea-level water, 3D-noise caves, deep lava lakes, grass seeds, wild wheat |
 | `src/tf/noise.ts` | Value noise / fBm built from elementwise tensor ops |
-| `src/tf/blockUpdateKernel.ts` | All the block-update rules fused into one WebGPU compute shader, run as a TF.js custom kernel (used on WebGPU) |
-| `src/tf/blockUpdate.ts` | The same rules as TF.js tensor ops (used on WebGL / CPU, and as a second implementation for the tests) |
-| `src/tf/blockUpdateReference.ts` | The same rules written cell by cell in plain JS: the readable spec, and the oracle the tests compare both against |
-| `src/tf/kernelCheck.ts` | Runs the fused kernel against the reference on random cells; the game and benchmark run it at startup |
-| `src/tf/simulation.ts` | Batches the awake chunks, each with a one-cell ghost border, steps them, writes back the interiors |
-| `src/tf/random.ts` | Per-cell random numbers made on the GPU (a hash), for the random plant rules |
-| `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`**; falls back to WebGL, then CPU; pre-compiles kernels |
-| `src/world/` | Chunk store, active area / ghost halo tracking, awake (sleeping) chunks, queued edits |
-| `src/render/` | Face-culling mesher, WGSL shaders, WebGPU renderer (opaque pass, line pass, translucent water pass) |
-| `src/player/` | Fly camera + pointer lock, touch controls (dynamic stick, look drag, buttons), voxel DDA ray picking |
+| `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`** (so worldgen output can be copied GPU to GPU); falls back to WebGL, then CPU; pre-compiles kernels |
+| `src/sim/rules.ts` | Every block-update rule as WGSL, shared by the GPU world and the TF.js kernel |
+| `src/sim/gpuStore.ts` | **The world in GPU memory**: ticks in place, per-chunk flags, picking, chunk reads/writes, worldgen copied in GPU to GPU |
+| `src/sim/cpuStore.ts` | The same operations on the CPU with the reference code: the Node tests' world, the GPU tests' oracle, the fallback |
+| `src/sim/simulation.ts` | Ticks the awake chunks and acts on the flags that come back |
+| `src/sim/check.ts` | Runs the GPU world against the reference on random cells; the game and benchmark run it at startup |
+| `src/world/` | Chunk bookkeeping: ring slots, active area / ghost halo, awake chunks, versions for remeshing, edited chunks saved when they leave; the TF.js → store loader |
+| `src/render/mesher.ts` | Face records (one `u32` per quad) and the reference mesher |
+| `src/render/gpuMesher.ts` | The mesher as a compute shader, writing face records and indirect draw counts |
+| `src/render/` (rest) | Mesh pool, WGSL shaders (vertex pulling from face records), renderer (opaque, lines, translucent water) |
+| `src/tf/blockUpdateReference.ts` | The rules cell by cell in plain JS: the readable spec, and the oracle every other version is tested against |
+| `src/tf/blockUpdate.ts`, `blockUpdateKernel.ts` | The rules as TF.js tensor ops, and as a TF.js custom kernel (the previous design's tick, kept for the benchmark) |
+| `src/player/` | Fly camera + pointer lock, touch controls (dynamic stick, look drag, buttons), the reference voxel ray walk |
 | `src/ui/hotbar.ts` | Block picker (keys 1–6 or tap) |
-| `test/gpu/` | WebGPU tests: a page that checks both GPU implementations against the reference, and a Playwright runner |
+| `test/gpu/` | WebGPU tests: a page that checks everything on the GPU against the reference, and a Playwright runner |
 
 ## Chunks and the ghost halo
 
 Chunks are 16×16 columns, 64 blocks tall. Around the player's chunk:
 
-- **Active chunks** (Chebyshev distance ≤ `ACTIVE_RADIUS`, default 3 → 7×7): simulated and rendered.
-- **Ghost chunks**: the ring one chunk further out (→ 32 chunks). These are generated and held
-  in memory but never stepped or drawn. They are the halo (ghost cells) for the stencil
-  computations:
-  - block updates for chunks at the edge of the active area read their neighbours from the
-    ghost ring, so fluids there see real terrain; ghost results are thrown away, so ghost
-    chunks stay read-only;
-  - the mesher reads ghost data to cull faces on the outer border of the active area.
+- **Active chunks** (Chebyshev distance ≤ `ACTIVE_RADIUS`, default 3 → 7×7): simulated and drawn.
+- **Ghost chunks**: the ring one chunk further out (→ 32 chunks). These are generated and kept
+  but never stepped or drawn. They are the halo (ghost cells) for the stencil computations:
+  block updates at the edge of the active area read their neighbours from the ghost ring, so
+  fluids there see real terrain, and the mesher reads them to cull faces on the outer border.
 
 When the player crosses a chunk border, the window re-centres: ghosts that come within range
 become active (they get meshed and simulated), active chunks that drop out become ghosts, and
-chunks that leave the halo are dropped. Edited chunks are kept, so changes persist.
+chunks that leave the halo are dropped. Chunks that changed since they were generated are read back
+from the GPU as they leave and written back when they return, so changes persist.
 Press `G` to see active (green) and ghost (orange) outlines.
+
+## The world lives in GPU memory
+
+All the cells are in one storage buffer: a ring of 9×9 chunk slots (the active area plus the ghost
+ring), chunk (cx, cz) in slot (cx mod 9, cz mod 9). Moving reuses the slots of the chunks that drop
+out, so nothing is ever shifted around, and a chunk's neighbours are always the slots next to its own.
+
+- **World generation** runs in TF.js on the same `GPUDevice`, and its output is copied into the slots
+  GPU to GPU.
+- **Block updates** run where the cells are. A tick takes the awake chunks and, for each, the slots
+  of its eight neighbours; one compute pass works out every cell's next state (into a scratch buffer,
+  so all chunks step from the same state) and ORs each cell's *flags* into its chunk's flags word:
+  whether something changed that matters, which borders that touched, and whether plants are still
+  growing. The results are copied back into the slots. The flags, 4 bytes per chunk, are the only
+  thing read back, and decide what remeshes and what stays awake.
+- **Meshing** is a compute shader too. Each visible face becomes a 32-bit record (block position, face,
+  type, fluid height or growth stage) in the chunk's mesh slot, and each slot has indirect draw
+  arguments that the mesher counts up, so the CPU never learns how many faces a chunk has. The vertex
+  shader turns each record into a quad.
+- **Picking** (the block under the crosshair) is a tiny compute shader that walks the ray through the
+  world buffer. Its answer arrives a frame or two later; an edit discards older answers, so clicks
+  never act on blocks that have already changed. **Edits** are single-cell writes into the buffer.
+
+GPU work runs in the order it's issued, so none of this needs locking: an edit made while a tick is
+running lands after it, and a mesh always shows the cells as of when it was made.
 
 ## Sleeping chunks and batches
 
 Most of the world is static most of the time, so block updates only run where something can change.
-A chunk is **awake** after an edit, when it's freshly generated or becomes active, when a neighbouring
+A chunk is **awake** after an edit, when it's freshly loaded or becomes active, when a neighbouring
 chunk changed along their shared border (or corner, since grass spreads diagonally), or while it has
-plants that can still change by chance. Each tick (5 per second) packs the awake chunks into one batch
-`[N, 64, 18, 18]`: every chunk with a one-cell ghost border copied from its neighbours. The rules only
-look one cell sideways, so that border is enough, and cost scales with the number of awake chunks
-wherever they are. Only the 16×16 interiors are read back and written.
+plants that can still change by chance. Each tick (5 per second) updates the awake chunks; cost scales
+with how many there are, wherever they are.
 
 A chunk that didn't change, with neighbours that didn't change, is a fixed point of the deterministic
 rules, so it goes back to sleep. Random rules break that ("nothing happened" can just be luck), so the
 step marks dirt that grass could spread onto (*primed* dirt, a flag in the cell's spare level bits), and
-the write-back, which scans every cell anyway, keeps chunks with primed dirt or unripe wheat awake.
-Priming doesn't count as a change, so it never triggers a remesh. With nothing changing, no tick runs.
-The HUD shows the batch size, whether the plant rules ran, and how many chunks are still growing.
+chunks with primed dirt or unripe wheat stay awake. Priming doesn't count as a change, so it never
+triggers a remesh. With nothing changing, no tick runs. The HUD shows the batch size, how many chunks
+are still growing, and how many bytes a tick reads back.
 
 ## Block update rules
 
@@ -105,32 +133,30 @@ All cells in the region update in parallel from the previous state:
   (water decays by 1, lava by 2, so lava spreads less far).
 - Lava with water beside or above it turns to stone; a cell that both fluids would flow into becomes stone.
 - **Grass** spreads like Minecraft's: onto dirt with air above it, from living grass one block to the side
-  and from one below to three above (a 5×3×3 max-pool), with a chance per tick. Grass under a solid
+  and from one below to three above (a 5×3×3 box), with a chance per tick. Grass under a solid
   block or a fluid source dies back to dirt.
 - **Wheat** grows through stages 0–7 with a chance per tick, faster with water beside it or its soil
-  (Minecraft hydrates from 4 blocks away; here it's 1, so the one-cell ghost border still suffices).
+  (Minecraft hydrates from 4 blocks away; here it's 1, so no rule looks more than one block sideways).
   It pops off without dirt or grass under it, and flowing fluid washes it away.
 - World generation scatters a few grass seeds and small patches of wild wheat; both are also in the hotbar.
 
-## Three implementations of the rules
+## The rules, the reference and the tests
 
-- **Fused WebGPU kernel** (`blockUpdateKernel.ts`), used whenever TF.js runs on WebGPU: one compute
-  shader that works out each cell's next state from its neighbours in a single pass, registered as a
-  TF.js kernel (`tf.engine().runKernel`, tensors in and out). Written as tensor ops, the same rules take
-  about a hundred operations per tick, and each is a full pass over the cells in GPU memory plus a
-  dispatch issued from the main thread. That cost dominated: fused, ticks are many times faster and
-  the main thread spends well under a millisecond issuing one.
-- **Tensor ops** (`blockUpdate.ts`): the fallback on WebGL and CPU, and what the Node tests run.
+- **WGSL** (`sim/rules.ts`): one function that works out a cell's next state from its neighbours. The
+  GPU world runs it on chunks in place; the TF.js custom kernel (`blockUpdateKernel.ts`) runs it on
+  chunks packed with their ghost borders, the previous design, which the benchmark still times.
+- **Tensor ops** (`blockUpdate.ts`): the same rules as about a hundred TF.js operations.
 - **Reference** (`blockUpdateReference.ts`): plain JS, one cell at a time. The spec.
 
-The plant rules' random numbers make exact comparison possible. The kernel uses an integer hash (PCG)
-of each cell's index and a per-tick seed, which the reference reproduces bit for bit (`cellRandom`).
-The tensor-op version takes its random numbers as an input tensor (made on the GPU with a float hash
-in the game, since `tf.randomUniform` would generate them in JavaScript), so tests feed it and the
-reference the same ones. `npm test` checks the tensor ops against the reference on the CPU backend;
-`npm run test:gpu` checks both GPU implementations against it on a real WebGPU backend, in CI too.
-When the game or benchmark starts on WebGPU it checks the kernel on that GPU, and falls back to the
-tensor ops if it disagrees.
+The plant rules' random numbers make exact comparison possible: an integer hash (PCG) of each cell's
+index and a per-tick seed, which the reference reproduces bit for bit (`cellRandom`). `CpuStore` does
+everything the GPU world does with reference code (the rules, the mesher, the ray walk), so the tests
+can compare the two exactly: `npm test` runs the world logic on it (halo, sleeping, flags, saving
+chunks, plants) and checks the tensor ops against the reference; `npm run test:gpu` runs on a real
+WebGPU device, in CI too, and compares ticks, flags, meshes and picking on random cells, a whole game
+session (worldgen, edits, ticks, moving away and back) on both stores, and the TF.js versions. The
+game and the benchmark run a small version of that check at startup; if this GPU disagrees, the game
+keeps its world on the CPU instead.
 
 ## TF.js performance notes
 

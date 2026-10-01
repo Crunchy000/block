@@ -1,36 +1,43 @@
 import * as tf from '@tensorflow/tfjs';
 import {
-  Block, CHUNK_HEIGHT, CHUNK_VOLUME, DEFAULT_RATES, WHEAT_RIPE, cellLevel, cellType,
+  Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, DEFAULT_RATES, WHEAT_RIPE, blockIndex, cellLevel, cellType,
 } from './constants';
 import { requestGpu } from './render/gpu';
+import { checkGpuStore, type StoreCheck } from './sim/check';
+import { GpuStore } from './sim/gpuStore';
+import { randomSeed } from './sim/rules';
+import { Simulation } from './sim/simulation';
+import { ringSize } from './sim/store';
 import { initTensorflow, warmUpKernels } from './tf/backend';
-import { blockUpdateStep } from './tf/blockUpdate';
-import { blockUpdateFused, fusedAvailable, randomSeed } from './tf/blockUpdateKernel';
-import { checkFusedKernel, type KernelCheck } from './tf/kernelCheck';
-import { randomField } from './tf/random';
-import { HALO, PADDED, Simulation, packChunk } from './tf/simulation';
-import { GEN_BATCH, generateChunks } from './tf/worldgen';
-import type { Chunk } from './world/chunk';
-import { World } from './world/world';
+import { blockUpdateFused, fusedAvailable } from './tf/blockUpdateKernel';
+import { generateAll } from './world/loader';
+import { World, tickJobs } from './world/world';
 
-// Measures how many block updates per second this device computes with the game's
-// code. One block update = working out one cell's next state for one tick; only real
-// chunk cells count, not the ghost border cells each chunk is padded with.
+// Measures how many block updates per second this device computes with the game's code.
+// One block update = working out one cell's next state for one tick, counting the
+// 16x16x64 cells of each chunk simulated.
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const params = new URLSearchParams(location.search);
 /** How long each measurement runs (?quick shortens it, for slow test machines). */
 const BUDGET_MS = params.has('quick') ? 300 : 2000;
-/** Batch sizes to try. 49 is every active chunk; bigger batches repeat chunks. */
+/** Chunks per tick to try (all different chunks; the game's view has 49). */
 const BATCHES = [1, 4, 16, 49, 100, 200];
-/** The tensor-op rules make ~100 full-size temporaries per tick; past this they need too much GPU memory. */
-const OPS_MAX_BATCH = 100;
-const PADDED_VOLUME = CHUNK_HEIGHT * PADDED * PADDED;
+/** The benchmark world: 15x15 active chunks (enough for the biggest batch) plus the ghost ring. */
+const ACTIVE_RADIUS = 7;
 const TICKS_PER_SECOND = 5;
 /** Receives the result of the write-back comparison so the JIT can't drop it as dead code. */
 let compareSink = 0;
 
-interface Setup { backend: string; gpu: string; world: World }
+interface Setup {
+  device: GPUDevice;
+  backend: string;
+  gpu: string;
+  store: GpuStore;
+  world: World;
+  /** Every chunk's cells at the start, on the CPU, for the previous design's tick loop. */
+  copies: Map<string, Uint8Array>;
+}
 let setup: Promise<Setup> | undefined;
 
 const status = (text: string, error = false) => {
@@ -40,7 +47,7 @@ const status = (text: string, error = false) => {
 };
 const progress = (fraction: number) => { $('bar').style.width = `${Math.round(fraction * 100)}%`; };
 
-/** GPU, TF.js, compiled kernels and the terrain around spawn: once per page. */
+/** GPU, TF.js, compiled kernels and the benchmark world: once per page. */
 function prepare(): Promise<Setup> {
   setup ??= (async () => {
     status('Starting WebGPU and TensorFlow.js…');
@@ -48,55 +55,29 @@ function prepare(): Promise<Setup> {
     const backend = await initTensorflow(device, info);
     status('Compiling GPU kernels…');
     await warmUpKernels();
+    const store = await GpuStore.create(device, ringSize(ACTIVE_RADIUS + 1));
     status('Generating terrain…');
-    const world = await loadWorld();
+    const world = new World(store, ACTIVE_RADIUS, ACTIVE_RADIUS + 1);
+    await generateAll(world);
+    const copies = new Map<string, Uint8Array>();
+    for (const c of world.chunks.values()) copies.set(c.key, Uint8Array.from(await store.readChunk(c.slot)));
     const gpu = [info.vendor, info.architecture, info.description].filter(Boolean).join(' ') || 'unknown GPU';
-    return { backend, gpu, world };
+    return { device, backend, gpu, store, world, copies };
   })();
   setup.catch(() => { setup = undefined; }); // allow a retry
   return setup;
 }
 
-/** The game's view around spawn: 7x7 active chunks plus the ghost ring. */
-async function loadWorld(): Promise<World> {
-  const world = new World();
-  world.recenter(8, 8);
-  for (;;) {
-    const batch = world.missingChunks(GEN_BATCH);
-    if (batch.length === 0) return world;
-    world.markGenerating(batch);
-    const data = await generateChunks(batch);
-    batch.forEach((c, i) => world.addGenerated(c, data[i]));
-  }
-}
-
 interface Rate {
   /** Wall time per tick. */
   ms: number;
-  /** Main-thread time per tick (packing, issuing the ops, comparing the results). */
+  /** Main-thread time per tick. */
   mainMs: number;
   updatesPerSecond: number;
 }
 
-const batchOf = (world: World, n: number): Chunk[] => {
-  const active = world.activeChunks();
-  return Array.from({ length: n }, (_, i) => active[i % active.length]);
-};
-
-/** Which implementation of the rules: the fused WebGPU kernel, or the tensor-op version. */
-type Rules = 'fused' | 'ops';
-
-/** One tick of the rules on a padded batch; `halo` strips the ghost border from the output. */
-function step(cells: tf.Tensor4D, plants: boolean, rules: Rules, halo: number): tf.Tensor4D {
-  if (rules === 'fused') return blockUpdateFused(cells, { seed: randomSeed(), plants, halo });
-  const seeds = [Math.random() * 999, Math.random() * 999, Math.random() * 999] as const;
-  const out = blockUpdateStep(cells, plants ? randomField(cells.shape, seeds) : undefined);
-  const [n, h, d, w] = cells.shape;
-  return halo ? out.slice([0, 0, halo, halo], [n, h, d - 2 * halo, w - 2 * halo]) : out;
-}
-
-/** Run `tick` repeatedly for BUDGET_MS (after one warm-up run) and work out the rate. */
-async function measure(n: number, tick: () => Promise<number>): Promise<Rate> {
+/** Run `tick` repeatedly for BUDGET_MS (after one warm-up run) and work out the rate. `tick` returns its main-thread ms. */
+async function measure(chunksPerTick: number, tick: () => Promise<number>): Promise<Rate> {
   await tick();
   let ticks = 0, mainMs = 0;
   const start = performance.now();
@@ -105,202 +86,233 @@ async function measure(n: number, tick: () => Promise<number>): Promise<Rate> {
     ticks++;
   } while (performance.now() - start < BUDGET_MS);
   const ms = (performance.now() - start) / ticks;
-  return { ms, mainMs: mainMs / ticks, updatesPerSecond: (n * CHUNK_VOLUME * 1000) / ms };
+  return { ms, mainMs: mainMs / ticks, updatesPerSecond: (chunksPerTick * CHUNK_VOLUME * 1000) / ms };
 }
 
+/** The n active chunks nearest the centre. */
+const nearest = (world: World, n: number) =>
+  world.activeChunks().sort((a, b) => Math.hypot(a.cx, a.cz) - Math.hypot(b.cx, b.cz)).slice(0, n);
+
 /**
- * The game's tick on a fixed batch of chunks: pack each with its ghost border, run the
- * step, read the interiors back and compare them with the chunks (the world isn't changed).
+ * The game's tick loop: the chunks are updated where they live in GPU memory, and the
+ * tick waits for their flags (4 bytes per chunk) to come back, as the game does.
  */
-function gameLoop(world: World, n: number, plants: boolean, rules: Rules): Promise<Rate> {
-  const chunks = batchOf(world, n);
-  const cells = new Int32Array(n * PADDED_VOLUME);
+function residentLoop({ store, world }: Setup, n: number): Promise<Rate> {
+  const jobs = tickJobs(world, nearest(world, n));
   return measure(n, async () => {
     const t0 = performance.now();
-    chunks.forEach((c, i) => packChunk(world, c, cells, i * PADDED_VOLUME));
-    const out = tf.tidy(() => step(tf.tensor4d(cells, [n, CHUNK_HEIGHT, PADDED, PADDED], 'int32'), plants, rules, HALO));
+    const flags = store.tick(jobs, randomSeed(), DEFAULT_RATES);
+    const mainMs = performance.now() - t0;
+    compareSink += (await flags)[0];
+    return mainMs;
+  });
+}
+
+/** Ticks issued back to back without reading anything back, with one wait per 4 ticks: the GPU's own speed. */
+function gpuOnly({ store, world, device }: Setup, n: number, plants = true): Promise<Rate> {
+  const jobs = tickJobs(world, nearest(world, n));
+  return measure(n * 4, async () => {
+    const t0 = performance.now();
+    for (let k = 0; k < 4; k++) store.step(jobs, randomSeed(), DEFAULT_RATES, false, plants);
+    const mainMs = performance.now() - t0;
+    await device.queue.onSubmittedWorkDone();
+    return mainMs;
+  });
+}
+
+const P = CHUNK_SIZE + 2;
+const PADDED_VOLUME = CHUNK_HEIGHT * P * P;
+
+/**
+ * The previous design's tick loop, for comparison: the world on the CPU, each tick
+ * packing the chunks with a one-cell border from their neighbours, uploading them, one
+ * step of the same rules (as a TF.js kernel), reading the results back and comparing them
+ * with the chunks to find what changed (here nothing is written back).
+ */
+function previousLoop({ world, copies }: Setup, n: number): Promise<Rate> {
+  const chunks = nearest(world, n);
+  const cells = new Int32Array(n * PADDED_VOLUME);
+  const data = (cx: number, cz: number) => copies.get(`${cx},${cz}`)!;
+  return measure(n, async () => {
+    const t0 = performance.now();
+    chunks.forEach((c, i) => packChunk(data, c.cx, c.cz, cells, i * PADDED_VOLUME));
+    const out = tf.tidy(() => blockUpdateFused(tf.tensor4d(cells, [n, CHUNK_HEIGHT, P, P], 'int32'), { seed: randomSeed(), plants: true, halo: 1 }));
     const t1 = performance.now();
     const next = (await out.data()) as Int32Array;
     out.dispose();
     const t2 = performance.now();
     chunks.forEach((c, k) => {
-      for (let i = 0, base = k * CHUNK_VOLUME; i < CHUNK_VOLUME; i++) if (next[base + i] !== c.data[i]) compareSink++;
+      const own = data(c.cx, c.cz);
+      for (let i = 0, base = k * CHUNK_VOLUME; i < CHUNK_VOLUME; i++) if (next[base + i] !== own[i]) compareSink++;
     });
     return t1 - t0 + (performance.now() - t2);
   });
 }
 
-/**
- * Steps chained on the GPU with no packing or reading back in between: the ceiling if
- * the world's state stayed on the GPU. Each measured round is 4 steps, then one sync.
- */
-async function gpuOnly(world: World, n: number, plants: boolean, rules: Rules): Promise<Rate> {
-  const cells = new Int32Array(n * PADDED_VOLUME);
-  batchOf(world, n).forEach((c, i) => packChunk(world, c, cells, i * PADDED_VOLUME));
-  let state = tf.tensor4d(cells, [n, CHUNK_HEIGHT, PADDED, PADDED], 'int32');
-  try {
-    return await measure(n * 4, async () => {
-      const t0 = performance.now();
-      for (let k = 0; k < 4; k++) {
-        const next = tf.tidy(() => step(state, plants, rules, 0));
-        state.dispose();
-        state = next;
-      }
-      const t1 = performance.now();
-      const probe = state.slice([0, 0, 0, 0], [1, 1, 1, 1]);
-      await probe.data(); // wait for the GPU to finish
-      probe.dispose();
-      return t1 - t0;
-    });
-  } finally {
-    state.dispose();
+/** Write chunk (cx, cz) with a one-cell border from its eight neighbours into `out` at `base`, as [H][18][18]. */
+function packChunk(data: (cx: number, cz: number) => Uint8Array, cx: number, cz: number, out: Int32Array, base: number): void {
+  const S = CHUNK_SIZE, last = S - 1;
+  const at = (dx: number, dz: number) => data(cx + dx, cz + dz);
+  const self = at(0, 0), n = at(0, -1), s = at(0, 1), w = at(-1, 0), e = at(1, 0);
+  const nw = at(-1, -1), ne = at(1, -1), sw = at(-1, 1), se = at(1, 1);
+  for (let y = 0; y < CHUNK_HEIGHT; y++) {
+    const row = (pz: number) => base + (y * P + pz) * P;
+    for (let z = 0; z < S; z++) {
+      const dst = row(z + 1), src = blockIndex(0, y, z);
+      out.set(self.subarray(src, src + S), dst + 1);
+      out[dst] = w[blockIndex(last, y, z)];
+      out[dst + P - 1] = e[blockIndex(0, y, z)];
+    }
+    const top = row(0), bottom = row(P - 1);
+    const nRow = blockIndex(0, y, last), sRow = blockIndex(0, y, 0);
+    out.set(n.subarray(nRow, nRow + S), top + 1);
+    out[top] = nw[blockIndex(last, y, last)];
+    out[top + P - 1] = ne[blockIndex(0, y, last)];
+    out.set(s.subarray(sRow, sRow + S), bottom + 1);
+    out[bottom] = sw[blockIndex(last, y, 0)];
+    out[bottom + P - 1] = se[blockIndex(0, y, 0)];
   }
 }
 
 const fmtRate = (v: number) =>
   v >= 1e9 ? `${(v / 1e9).toFixed(2)} billion` : v >= 1e6 ? `${(v / 1e6).toFixed(1)} million` : `${Math.round(v / 1e3)} thousand`;
-const fmtMs = (v: number) => (v >= 100 ? v.toFixed(0) : v.toFixed(1));
+const fmtMs = (v: number) => (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2));
+
+interface Row { n: number; resident?: Rate; gpu?: Rate; previous?: Rate }
 
 async function runBenchmark(): Promise<void> {
-  const { backend, gpu, world } = await prepare();
-  // Check the fused kernel against the reference first: only measure what computes correctly.
-  let check: KernelCheck | undefined;
-  if (fusedAvailable()) {
-    status('Checking the fused kernel against the reference rules…');
-    check = await checkFusedKernel();
-  }
-  const fused = check?.ok === true;
-  const opsBatches = BATCHES.filter((n) => n <= OPS_MAX_BATCH);
-  const steps = (fused ? BATCHES.length * 2 + 1 : 1) + opsBatches.length;
+  const s = await prepare();
+  status('Checking the GPU world code against the reference rules…');
+  const check = await checkGpuStore(s.device);
+  if (!check.ok) throw new Error(`the GPU world code disagrees with the reference on this GPU (${check.detail})`);
+  const previous = fusedAvailable();
+  const steps = BATCHES.length * (previous ? 3 : 2) + 1;
   let done = 0;
   const next = (what: string, n: number) => {
     progress(done / steps);
-    status(`${what}, ${n} chunk${n === 1 ? '' : 's'} (${done + 1} of ${steps})…`);
+    status(`${what}, ${n} chunk${n === 1 ? '' : 's'} per tick (${done + 1} of ${steps})…`);
     done++;
   };
   const rows: Row[] = BATCHES.map((n) => ({ n }));
-  if (fused) {
-    for (const row of rows) { next('Fused kernel, game tick loop', row.n); row.fused = await gameLoop(world, row.n, true, 'fused'); }
-    for (const row of rows) { next('Fused kernel, GPU only', row.n); row.gpu = await gpuOnly(world, row.n, true, 'fused'); }
-  }
-  for (const row of rows.filter((r) => r.n <= OPS_MAX_BATCH)) {
-    next('Tensor-op rules, game tick loop', row.n);
-    row.ops = await gameLoop(world, row.n, true, 'ops');
-  }
-  const rules: Rules = fused ? 'fused' : 'ops';
-  const best = bestRow(rows, rules);
+  // The previous design first: it reads the CPU copies and changes nothing.
+  if (previous) for (const row of rows) { next('Previous design (pack, upload, read back)', row.n); row.previous = await previousLoop(s, row.n); }
+  for (const row of rows) { next('Game tick loop, world on the GPU', row.n); row.resident = await residentLoop(s, row.n); }
+  for (const row of rows) { next('GPU only', row.n); row.gpu = await gpuOnly(s, row.n); }
+  const best = bestRow(rows);
   next('Fluid rules only', best.n);
-  const fluids = await gameLoop(world, best.n, false, rules);
+  const fluids = await gpuOnly(s, best.n, false);
   progress(1);
-  status(`Done. ${backend} on ${gpu}.`);
-  showResult(rows, rules, fluids, check, backend, gpu);
+  status(`Done. ${s.gpu}.`);
+  showResult(rows, fluids, check, s.gpu);
 }
 
-interface Row { n: number; fused?: Rate; gpu?: Rate; ops?: Rate }
+const rate = (r?: Rate) => r?.updatesPerSecond ?? 0;
+const bestRow = (rows: Row[]) => rows.reduce((b, r) => (rate(r.resident) > rate(b.resident) ? r : b));
 
-const rateOf = (row: Row, rules: Rules) => (rules === 'fused' ? row.fused : row.ops)?.updatesPerSecond ?? 0;
-const bestRow = (rows: Row[], rules: Rules) => rows.reduce((b, r) => (rateOf(r, rules) > rateOf(b, rules) ? r : b));
-
-function showResult(rows: Row[], rules: Rules, fluids: Rate, check: KernelCheck | undefined, backend: string, gpu: string): void {
-  const best = bestRow(rows, rules), top = rateOf(best, rules);
+function showResult(rows: Row[], fluids: Rate, check: StoreCheck, gpu: string): void {
+  const best = bestRow(rows), top = rate(best.resident);
   const chunksAt5 = Math.floor(top / (CHUNK_VOLUME * TICKS_PER_SECOND));
-  const opsBest = Math.max(...rows.map((r) => r.ops?.updatesPerSecond ?? 0));
-  const gpuTop = Math.max(...rows.map((r) => r.gpu?.updatesPerSecond ?? 0));
+  const previousBest = Math.max(...rows.map((r) => rate(r.previous)));
+  const gpuBest = Math.max(...rows.map((r) => rate(r.gpu)));
   const cellRate = (r?: Rate) => (r ? fmtRate(r.updatesPerSecond) : '—');
-  const rowsHtml = rows.map((r) => {
-    const main = rules === 'fused' ? r.fused : r.ops;
-    return `
+  const ms = (r?: Rate, key: 'ms' | 'mainMs' = 'ms') => (r ? `${fmtMs(r[key])} ms` : '—');
+  const rowsHtml = rows.map((r) => `
     <tr${r === best ? ' class="best"' : ''}>
       <td>${r.n}</td>
-      <td>${main ? `${fmtMs(main.ms)} ms` : '—'}</td>
-      <td>${main ? `${fmtMs(main.mainMs)} ms` : '—'}</td>
-      <td>${cellRate(r.fused)}</td>
+      <td>${ms(r.resident)}</td>
+      <td>${ms(r.resident, 'mainMs')}</td>
+      <td>${cellRate(r.resident)}</td>
       <td>${cellRate(r.gpu)}</td>
-      <td>${cellRate(r.ops)}</td>
-    </tr>`;
-  }).join('');
-  const checkText = !check
-    ? `The fused kernel needs WebGPU; this backend (${backend}) uses the tensor-op rules.`
-    : check.ok
-      ? `Rules check: the fused GPU kernel matched the reference rules on all ${check.cells.toLocaleString()} cells.`
-      : `Rules check failed, so the tensor-op rules were measured instead: ${check.mismatches} of ${check.cells} cells differ (first: ${check.detail}).`;
+      <td>${cellRate(r.previous)}</td>
+      <td>${ms(r.previous, 'mainMs')}</td>
+    </tr>`).join('');
   const el = $('result');
   el.hidden = false;
   el.innerHTML = `
     <div class="headline">${fmtRate(top)} <span class="unit">block updates per second</span></div>
-    <p class="muted">The game's tick loop with every rule (fluids, grass, wheat) on the
-      ${rules === 'fused' ? 'fused GPU kernel' : 'tensor-op rules'}: packing chunks with their ghost borders, one tick on the GPU,
-      reading results back. Best with ${best.n} chunks per tick.</p>
+    <p class="muted">The game's tick loop with every rule (fluids, grass, wheat): the world stays in GPU memory,
+      each tick updates the chunks where they are and reads back only a 4-byte flags word per chunk.
+      Best with ${best.n} chunks per tick.</p>
     <div class="stats">
       <div class="stat"><b>${chunksAt5.toLocaleString()} chunks</b>could keep updating at ${TICKS_PER_SECOND} ticks per second (the view has 49)</div>
-      ${rules === 'fused' && opsBest > 0 ? `<div class="stat"><b>${(top / opsBest).toFixed(1)}× faster</b>than the tensor-op rules (${fmtRate(opsBest)}/s at best)</div>` : ''}
-      ${gpuTop > 0 ? `<div class="stat"><b>${fmtRate(gpuTop)}/s</b>GPU only: ticks chained with the state kept on the GPU</div>` : ''}
-      <div class="stat"><b>${fmtRate(fluids.updatesPerSecond)}/s</b>fluid rules only (no grass or wheat), ${best.n} chunks</div>
+      ${previousBest > 0 ? `<div class="stat"><b>${(top / previousBest).toFixed(1)}× faster</b>than the previous design, which moved the chunks to and from the CPU every tick (${fmtRate(previousBest)}/s at best)</div>` : ''}
+      <div class="stat"><b>${fmtRate(gpuBest)}/s</b>GPU only: ticks issued back to back without waiting for their flags</div>
+      <div class="stat"><b>${fmtRate(fluids.updatesPerSecond)}/s</b>GPU only with fluid rules only (no grass or wheat), ${best.n} chunks</div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>chunks per tick</th><th>tick</th><th>main thread</th><th>fused kernel</th><th>fused, GPU only</th><th>tensor-op rules</th></tr></thead>
+      <thead><tr><th>chunks<br>per tick</th><th>tick</th><th>main<br>thread</th><th>game<br>loop</th><th>GPU<br>only</th><th>previous<br>design</th><th>previous<br>main thread</th></tr></thead>
       <tbody>${rowsHtml}</tbody>
     </table></div>
-    <p class="muted" style="margin-top:12px">${checkText}</p>
-    <p class="muted">Updates per second for each way of running the rules. One block update = one cell's next
-      state for one tick, counting the 16×16×64 cells of each chunk (not its ghost border). Each figure is the
-      average over ~${BUDGET_MS / 1000} s. Batches over 49 chunks repeat chunks; the tensor-op rules stop at
-      ${OPS_MAX_BATCH} (they need too much GPU memory beyond that). ${backend} on ${gpu}.</p>`;
+    <p class="muted" style="margin-top:12px">Checked first: on this GPU the world code matched the reference rules exactly
+      (${check.summary}).</p>
+    <p class="muted">One block update = one cell's next state for one tick, counting the 16×16×64 cells of each chunk;
+      every chunk in a batch is a different one (from a 15×15-chunk world). Each figure is the average over
+      ~${BUDGET_MS / 1000} s; "main thread" is the CPU time a tick takes on the page's thread. The previous design kept
+      the world on the CPU: each tick it packed the chunks with a one-cell border from their neighbours, ran the same
+      rules as a TF.js kernel, and read every cell back to see what changed. ${gpu}.</p>`;
 }
 
 async function runTakeover(): Promise<void> {
   const log = $('log');
   const write = (line = '') => { log.textContent += line + '\n'; };
   log.textContent = '';
-  await prepare();
+  const { device } = await prepare();
   status('Generating fresh terrain for the takeover…');
-  const world = await loadWorld(); // a fresh world: the takeover changes it
-  const chance = (name: string, fallback: number) =>
-    params.has(name) ? Math.min(1, Math.max(0, Number(params.get(name)))) : fallback;
-  const rates = {
-    grassSpread: chance('spread', DEFAULT_RATES.grassSpread),
-    wheatGrow: chance('grow', DEFAULT_RATES.wheatGrow),
-    wheatGrowWet: chance('grow', DEFAULT_RATES.wheatGrowWet),
-  };
-  const maxTicks = Number(params.get('ticks') ?? 600);
-  write(`Chances per tick: grass ${rates.grassSpread.toFixed(4)}, wheat ${rates.wheatGrow.toFixed(4)} (wet ${rates.wheatGrowWet.toFixed(4)}). Up to ${maxTicks} ticks.`);
-  write('Only awake chunks are simulated: grass still able to spread, unripe wheat, or a change next door.');
-  write();
-  write('  tick  game time   batch   tick ms   main thread   growing   grass   wheat ripe');
-  const sim = new Simulation(world, rates);
-  const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
-  const row = (tick: number, tickMs: string, cpuMs: string) => {
-    let grass = 0, wheat = 0, ripe = 0;
-    for (const c of world.activeChunks()) {
-      for (const v of c.data) {
-        if (cellType(v) === Block.Grass) grass++;
-        else if (cellType(v) === Block.Wheat) { wheat++; if (cellLevel(v) === WHEAT_RIPE) ripe++; }
+  // A fresh world: the game's view around spawn. The takeover changes it.
+  const store = await GpuStore.create(device, ringSize(4));
+  try {
+    const world = new World(store, 3, 4);
+    await generateAll(world);
+    const chance = (name: string, fallback: number) =>
+      params.has(name) ? Math.min(1, Math.max(0, Number(params.get(name)))) : fallback;
+    const rates = {
+      grassSpread: chance('spread', DEFAULT_RATES.grassSpread),
+      wheatGrow: chance('grow', DEFAULT_RATES.wheatGrow),
+      wheatGrowWet: chance('grow', DEFAULT_RATES.wheatGrowWet),
+    };
+    const maxTicks = Number(params.get('ticks') ?? 600);
+    write(`Chances per tick: grass ${rates.grassSpread.toFixed(4)}, wheat ${rates.wheatGrow.toFixed(4)} (wet ${rates.wheatGrowWet.toFixed(4)}). Up to ${maxTicks} ticks.`);
+    write('Only awake chunks are simulated: grass still able to spread, unripe wheat, or a change next door.');
+    write('(Counting the plants reads the chunks back from the GPU; the game never needs to.)');
+    write();
+    write('  tick  game time   batch   tick ms   main thread   growing   grass   wheat ripe');
+    const sim = new Simulation(world, rates);
+    const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+    const row = async (tick: number, tickMs: string, cpuMs: string) => {
+      let grass = 0, wheat = 0, ripe = 0;
+      for (const c of world.activeChunks()) {
+        for (const v of await store.readChunk(c.slot)) {
+          if (cellType(v) === Block.Grass) grass++;
+          else if (cellType(v) === Block.Wheat) { wheat++; if (cellLevel(v) === WHEAT_RIPE) ripe++; }
+        }
+      }
+      const ripeText = wheat ? `${Math.round((100 * ripe) / wheat)}% of ${wheat}` : 'none';
+      write(`${String(tick).padStart(6)} ${`${(tick / TICKS_PER_SECOND).toFixed(0)} s`.padStart(10)} ${String(sim.lastBatch).padStart(7)} ${tickMs.padStart(9)} ${cpuMs.padStart(13)} ${String(sim.growingChunks).padStart(9)} ${String(grass).padStart(7)}   ${ripeText}`);
+    };
+    const started = performance.now();
+    let ticks = 0, totalMs = 0, totalCpu = 0, chunkTicks = 0, windowMs: number[] = [], windowCpu: number[] = [];
+    await row(0, '-', '-');
+    while (ticks < maxTicks) {
+      status(`Takeover: tick ${ticks + 1}…`);
+      progress(ticks / maxTicks);
+      if (!(await sim.tick())) break; // everything asleep: settled
+      ticks++;
+      totalMs += sim.lastTickMs; totalCpu += sim.lastCpuMs; chunkTicks += sim.lastBatch;
+      windowMs.push(sim.lastTickMs); windowCpu.push(sim.lastCpuMs);
+      if (ticks % 50 === 0) {
+        await row(ticks, fmtMs(median(windowMs)), fmtMs(median(windowCpu)));
+        windowMs = []; windowCpu = [];
       }
     }
-    const ripeText = wheat ? `${Math.round((100 * ripe) / wheat)}% of ${wheat}` : 'none';
-    write(`${String(tick).padStart(6)} ${`${(tick / TICKS_PER_SECOND).toFixed(0)} s`.padStart(10)} ${String(sim.lastBatch).padStart(7)} ${tickMs.padStart(9)} ${cpuMs.padStart(13)} ${String(sim.growingChunks).padStart(9)} ${String(grass).padStart(7)}   ${ripeText}`);
-  };
-  const started = performance.now();
-  let ticks = 0, totalMs = 0, totalCpu = 0, chunkTicks = 0, windowMs: number[] = [], windowCpu: number[] = [];
-  row(0, '-', '-');
-  while (ticks < maxTicks) {
-    status(`Takeover: tick ${ticks + 1}…`);
-    progress(ticks / maxTicks);
-    if (!(await sim.tick())) break; // everything asleep: settled
-    ticks++;
-    totalMs += sim.lastTickMs; totalCpu += sim.lastCpuMs; chunkTicks += sim.lastBatch;
-    windowMs.push(sim.lastTickMs); windowCpu.push(sim.lastCpuMs);
-    if (ticks % 50 === 0) {
-      row(ticks, fmtMs(median(windowMs)), fmtMs(median(windowCpu)));
-      windowMs = []; windowCpu = [];
+    if (windowMs.length) await row(ticks, fmtMs(median(windowMs)), fmtMs(median(windowCpu)));
+    write();
+    write(`${ticks} ticks in ${((performance.now() - started) / 1000).toFixed(1)} s${sim.asleep ? ', then everything settled and went to sleep' : ''}.`);
+    if (ticks) {
+      write(`Average tick ${fmtMs(totalMs / ticks)} ms (main thread ${fmtMs(totalCpu / ticks)} ms), ${(chunkTicks / ticks).toFixed(1)} chunks per tick,`);
+      write(`${fmtRate((chunkTicks * CHUNK_VOLUME * 1000) / totalMs)} block updates per second while ticking.`);
     }
-  }
-  if (windowMs.length) row(ticks, fmtMs(median(windowMs)), fmtMs(median(windowCpu)));
-  write();
-  write(`${ticks} ticks in ${((performance.now() - started) / 1000).toFixed(1)} s${sim.asleep ? ', then everything settled and went to sleep' : ''}.`);
-  if (ticks) {
-    write(`Average tick ${fmtMs(totalMs / ticks)} ms (main thread ${fmtMs(totalCpu / ticks)} ms), ${(chunkTicks / ticks).toFixed(1)} chunks per tick,`);
-    write(`${fmtRate((chunkTicks * CHUNK_VOLUME * 1000) / totalMs)} block updates per second while ticking.`);
+  } finally {
+    store.destroy();
   }
   progress(1);
   status('Takeover done.');

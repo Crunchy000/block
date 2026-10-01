@@ -108,15 +108,15 @@ describe('GPU-friendliness', () => {
     const gen = await tf.profile(() => generateChunksTensor([{ cx: 0, cz: 0 }, { cx: 1, cz: 0 }]));
     expect(gen.kernelNames).not.toContain('Tile');
     (gen.result as tf.Tensor).dispose();
-    const { randomField } = await import('../src/tf/random');
     const cells = tf.zeros([2, 8, 18, 18], 'int32') as tf.Tensor4D;
+    const random = tf.fill([2, 8, 18, 18], 0.5) as tf.Tensor4D;
     const step = await tf.profile(() => blockUpdateStep(cells));
     expect(step.kernelNames).not.toContain('Tile');
     (step.result as tf.Tensor).dispose();
-    const grassStep = await tf.profile(() => blockUpdateStep(cells, randomField([2, 8, 18, 18], [1, 2, 3])));
+    const grassStep = await tf.profile(() => blockUpdateStep(cells, random));
     expect(grassStep.kernelNames).not.toContain('Tile');
     expect(grassStep.kernelNames).toContain('MaxPool3D');
     (grassStep.result as tf.Tensor).dispose();
-    cells.dispose();
+    tf.dispose([cells, random]);
   });
 });

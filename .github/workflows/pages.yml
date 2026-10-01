@@ -24,8 +24,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      # The fused WebGPU rules kernel, checked against the reference in headless Chromium
-      # (software Vulkan). Reports SKIP if the runner can't provide a WebGPU adapter.
+      # Everything that runs on the GPU (the world's ticks, flags, meshing and picking, and the
+      # TF.js kernels) checked against the reference in headless Chromium (software Vulkan).
+      # Reports SKIP if the runner can't provide a WebGPU adapter.
       - run: npx playwright install --with-deps chromium
       - run: npm run test:gpu
       - run: npm run build

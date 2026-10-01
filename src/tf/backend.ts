@@ -1,10 +1,5 @@
 import * as tf from '@tensorflow/tfjs';
 import { WebGPUBackend } from '@tensorflow/tfjs-backend-webgpu';
-import { CHUNK_HEIGHT, CHUNK_SIZE } from '../constants';
-import { blockUpdateStep } from './blockUpdate';
-import { blockUpdateFused } from './blockUpdateKernel';
-import { randomField } from './random';
-import { HALO, PADDED } from './simulation';
 import { GEN_BATCH, generateChunksTensor } from './worldgen';
 
 /**
@@ -59,34 +54,23 @@ async function selfTest(): Promise<void> {
 }
 
 /**
- * Compile every GPU kernel that world generation and block updates use before
- * play starts. Otherwise each kernel compiles the first time it runs, which
- * blocks the page (badly so on some drivers) in the middle of loading.
+ * Compile the GPU kernels world generation uses before play starts. Otherwise each
+ * kernel compiles the first time it runs, which blocks the page (badly so on some
+ * drivers) in the middle of loading.
  *
- * Kernels are cached by tensor rank and dtype rather than exact size, so
- * compiling with representative shapes covers every later run. In compile-only
- * mode the GPU backends build their pipelines in parallel without executing
- * anything or blocking the main thread.
+ * Kernels are cached by tensor rank and dtype rather than exact size, so compiling
+ * with representative shapes covers every later run. In compile-only mode the GPU
+ * backends build their pipelines in parallel without executing anything or blocking
+ * the main thread.
  */
 export async function warmUpKernels(): Promise<void> {
   const backend = tf.getBackend();
   const flag = backend === 'webgpu' ? 'WEBGPU_ENGINE_COMPILE_ONLY' : backend === 'webgl' ? 'ENGINE_COMPILE_ONLY' : null;
   if (!flag) return; // CPU has nothing to compile
   const coords = Array.from({ length: GEN_BATCH }, (_, i) => ({ cx: i, cz: 0 }));
-  // A batch of padded chunks as the simulation sends them. With 8 chunks even the
-  // per-axis terms of the random field are big enough to run on the GPU, as they do
-  // for real batches (TF.js runs ops on tiny CPU-side tensors on the CPU instead).
-  const batch = [8, CHUNK_HEIGHT, PADDED, PADDED] as const;
-  const interior = (t: tf.Tensor4D) => t.slice([0, 0, HALO, HALO], [batch[0], CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_SIZE]);
   tf.env().set(flag, true);
   try {
-    tf.tidy(() => {
-      generateChunksTensor(coords);
-      const cells = tf.zeros([...batch], 'int32') as tf.Tensor4D;
-      interior(blockUpdateStep(cells));
-      interior(blockUpdateStep(cells, randomField(batch, [1, 2, 3])));
-      if (backend === 'webgpu') blockUpdateFused(cells, { seed: 1, plants: true, halo: HALO });
-    });
+    tf.tidy(() => { generateChunksTensor(coords); });
     await (tf.backend() as unknown as { checkCompileCompletionAsync(): Promise<unknown> }).checkCompileCompletionAsync();
   } finally {
     tf.env().set(flag, false);

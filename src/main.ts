@@ -1,21 +1,25 @@
 import * as tf from '@tensorflow/tfjs';
-import { Block, CHUNK_HEIGHT, CHUNK_SIZE, DEFAULT_RATES, SOURCE_LEVEL, BLOCK_NAMES, cell } from './constants';
+import {
+  ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, DEFAULT_RATES, SOURCE_LEVEL, BLOCK_NAMES, cell,
+} from './constants';
 import { Controls } from './player/controls';
 import { TouchControls } from './player/touchControls';
-import { raycast, type RayHit } from './player/raycast';
+import type { RayHit } from './player/raycast';
 import { fpsView, multiply, perspective } from './render/math';
-import { meshChunk } from './render/mesher';
+import { MeshPool } from './render/meshPool';
 import { Renderer } from './render/renderer';
+import { checkGpuStore } from './sim/check';
+import { CpuStore } from './sim/cpuStore';
+import { GpuStore } from './sim/gpuStore';
+import { Simulation } from './sim/simulation';
+import { ringSize, type CellStore } from './sim/store';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
-import { fusedAvailable } from './tf/blockUpdateKernel';
-import { checkFusedKernel } from './tf/kernelCheck';
-import { Simulation } from './tf/simulation';
-import { GEN_BATCH, generateChunks } from './tf/worldgen';
 import { HOTBAR_BLOCKS, createHotbar } from './ui/hotbar';
-import { World } from './world/world';
+import { generateMissing } from './world/loader';
+import { World, meshSlotCount } from './world/world';
 
 const TICK_MS = 200;          // block-update rate (5 ticks / second)
-const MESH_BUDGET = 4;        // chunks meshed per frame
+const PICK_DISTANCE = 8;      // blocks
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -43,15 +47,19 @@ async function main(): Promise<void> {
   } catch (e) {
     console.warn('kernel warm-up failed; kernels will compile on first use', e);
   }
-  // Check the fused rules kernel against the reference on this GPU; if it disagrees
-  // (or fails), block updates use the tensor-op rules instead.
-  let fusedOk = false;
-  if (fusedAvailable()) {
-    setStatus('Checking the block-update kernel…');
-    const check = await checkFusedKernel().catch((e: unknown) => ({ ok: false, detail: String(e) }));
-    fusedOk = check.ok;
-    if (!check.ok) console.warn('Fused block-update kernel disagrees with the reference; using tensor-op rules.', check.detail);
-  }
+  const { device } = renderer;
+  const activeRadius = params.has('radius') ? Math.max(1, Math.floor(Number(params.get('radius')))) : ACTIVE_RADIUS;
+  const ghostRadius = activeRadius + 1;
+  // The world lives in GPU memory, where block updates, meshing and picking run. First
+  // check that this GPU computes them exactly as the reference code does; if it doesn't,
+  // the world lives on the CPU with the reference code instead (slower, same game).
+  setStatus('Checking the GPU world code…');
+  const check = await checkGpuStore(device).catch((e: unknown) => ({ ok: false, summary: '', detail: String(e) }));
+  if (!check.ok) console.warn('The GPU world code disagrees with the reference; keeping the world on the CPU.', check.detail);
+  const store: CellStore = check.ok && !params.has('cpu')
+    ? await GpuStore.create(device, ringSize(ghostRadius))
+    : new CpuStore(ringSize(ghostRadius));
+  const meshes = new MeshPool(device, meshSlotCount(activeRadius));
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
   let switching = false;
@@ -69,8 +77,7 @@ async function main(): Promise<void> {
       .finally(() => { switching = false; });
   };
 
-  const radius = params.has('radius') ? Math.max(1, Number(params.get('radius'))) : undefined;
-  const world = radius ? new World(radius, radius + 1) : new World();
+  const world = new World(store, activeRadius, ghostRadius);
   // ?spread= / ?grow= tune the per-tick chances of grass spreading (default 1/16; 0 stops it)
   // and wheat growing a stage (default 1/40, and 1/12 next to water; ?grow= sets both).
   const chance = (name: string) => Math.min(1, Math.max(0, Number(params.get(name))));
@@ -79,8 +86,7 @@ async function main(): Promise<void> {
     ...(params.has('spread') && { grassSpread: chance('spread') }),
     ...(params.has('grow') && { wheatGrow: chance('grow'), wheatGrowWet: chance('grow') }),
   });
-  sim.useFused = fusedOk;
-  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen
+  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu
   const pos = (params.get('pos') ?? '8,52,8').split(',').map(Number) as [number, number, number];
   const controls = new Controls(canvas, pos);
   if (params.has('yaw')) controls.yaw = Number(params.get('yaw'));
@@ -111,7 +117,7 @@ async function main(): Promise<void> {
   const touchFirst = matchMedia('(pointer: coarse)').matches;
 
   // Console / automation handle, e.g. block.world.setCell(x, y, z, value).
-  Object.assign(window, { block: { world, sim, controls, renderer, tf } });
+  Object.assign(window, { block: { world, sim, controls, renderer, store, tf } });
 
   const info = renderer.adapterInfo;
   const gpuName = [info.vendor, info.architecture || info.device || info.description].filter(Boolean).join(' ') || 'unknown';
@@ -127,44 +133,35 @@ async function main(): Promise<void> {
   let last = performance.now();
   let fps = 0;
 
+  // One batch of world generation at a time: TF.js writes it straight into the world's GPU
+  // memory, and the next batch waits until the GPU has done this one.
   const pumpGeneration = () => {
-    if (generating || switching) return;
-    const batch = world.missingChunks(GEN_BATCH);
-    if (batch.length === 0) return;
+    if (generating || switching || world.missingChunks(1).length === 0) return;
     generating = true;
-    world.markGenerating(batch);
-    generateChunks(batch)
-      .then((datas) => batch.forEach((c, i) => world.addGenerated(c, datas[i])))
-      .catch((e) => {
-        world.markGenerated(batch);
-        onTfError('worldgen')(e);
-      })
+    generateMissing(world)
+      .then(() => device.queue.onSubmittedWorkDone())
+      .catch(onTfError('worldgen'))
       .finally(() => { generating = false; });
   };
 
-  const pumpMeshing = () => {
-    // Drop GPU meshes for chunks that left the active area.
-    for (const key of [...renderer.chunkKeys()]) {
-      const c = world.chunks.get(key);
-      if (!c || c.state !== 'active') renderer.removeChunk(key);
-    }
-    const { cx, cz } = world.window;
-    const todo = world.activeChunks()
-      .filter((c) => c.version !== c.meshedVersion
-        // Wait for all 4 neighbours (active or ghost) so border faces cull correctly.
-        && world.getChunk(c.cx + 1, c.cz) && world.getChunk(c.cx - 1, c.cz)
-        && world.getChunk(c.cx, c.cz + 1) && world.getChunk(c.cx, c.cz - 1))
-      .sort((a, b) => Math.hypot(a.cx - cx, a.cz - cz) - Math.hypot(b.cx - cx, b.cz - cz))
-      .slice(0, MESH_BUDGET);
-    for (const c of todo) {
-      const version = c.version;
-      const mesh = meshChunk(world, c.cx, c.cz);
-      renderer.setChunkMesh(c.key, mesh, [c.cx * CHUNK_SIZE + 8, CHUNK_HEIGHT / 2, c.cz * CHUNK_SIZE + 8]);
-      c.meshedVersion = version;
-    }
+  // What's under the crosshair, worked out on the GPU from the world there. The answer
+  // arrives a frame or two later; until then the last one stands, except that an edit
+  // throws it away (and any answer worked out before the edit), so clicks never act on
+  // blocks that have already changed.
+  let hit: RayHit | null = null;
+  let picking = false;
+  let edits = 0;
+  const pick = () => {
+    if (picking) return;
+    picking = true;
+    const asked = edits;
+    store.raycast(controls.position, controls.look, PICK_DISTANCE)
+      .then((h) => { if (asked === edits) hit = h; })
+      .catch((e: unknown) => console.warn('picking failed', e))
+      .finally(() => { picking = false; });
   };
 
-  const handleInput = (hit: RayHit | null) => {
+  const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
       const slot = /^Digit([1-9])$/.exec(key);
       if (slot && HOTBAR_BLOCKS[Number(slot[1]) - 1] !== undefined) {
@@ -178,10 +175,12 @@ async function main(): Promise<void> {
       if (!hit) continue;
       // y = 0 is bedrock: it holds up fluids at the bottom of the world.
       if (button === 0 && hit.block[1] > 0) world.setCell(...hit.block, cell(Block.Air));
-      if (button === 2) {
+      else if (button === 2) {
         const level = selected === Block.Water || selected === Block.Lava ? SOURCE_LEVEL : 0;
         world.setCell(...hit.before, cell(selected, level));
-      }
+      } else continue;
+      edits++;
+      hit = null;
     }
   };
 
@@ -209,10 +208,10 @@ async function main(): Promise<void> {
   };
 
   const blockUpdateStatus = () => {
-    const batch = `${sim.lastBatch} chunk${sim.lastBatch === 1 ? '' : 's'}${sim.lastPlants ? ' + plants' : ''}`;
+    const batch = `${sim.lastBatch} chunk${sim.lastBatch === 1 ? '' : 's'}`;
     if (paused) return 'paused';
     if (!world.haloReady()) return 'waiting for terrain';
-    if (world.locked) return `running tick ${sim.ticks + 1} on ${batch}…`;
+    if (sim.busy && sim.ticks === 0) return 'running the first tick…';
     if (sim.ticks === 0) return 'starting…';
     if (sim.asleep) return `asleep after tick ${sim.ticks} (nothing changing)`;
     return `tick ${sim.ticks}: ${batch}, ${sim.lastTickMs.toFixed(0)} ms ` +
@@ -231,14 +230,17 @@ async function main(): Promise<void> {
     pumpGeneration();
 
     const eye = controls.position;
-    const hit = raycast((x, y, z) => world.getBlock(x, y, z), eye, controls.look, 8);
-    handleInput(hit);
+    handleInput();
+    pick();
 
-    if (!paused && !switching && now - lastTick >= TICK_MS && !world.locked) {
+    if (!paused && now - lastTick >= TICK_MS && !sim.busy) {
       lastTick = now;
-      sim.tick().catch(onTfError('block update'));
+      sim.tick().catch((e: unknown) => {
+        console.error('block update failed', e);
+        showError(`block update failed: ${e instanceof Error ? e.message : String(e)}`);
+      });
     }
-    pumpMeshing();
+    world.remesh(meshes);
 
     const { loaded, total } = world.haloProgress();
     setStatus(loaded < total ? `Generating world… ${loaded} / ${total} chunks` : `${touchFirst ? 'Tap' : 'Click'} anywhere to play`);
@@ -246,12 +248,17 @@ async function main(): Promise<void> {
     const fogDistance = world.activeRadius * CHUNK_SIZE + 8;
     const proj = perspective((70 * Math.PI) / 180, renderer.aspect, 0.1, fogDistance * 1.5);
     const viewProj = multiply(proj, fpsView(eye, controls.yaw, controls.pitch));
-    renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit));
+    renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, world.draws());
 
+    const saved = world.savedCount();
     hud.textContent = [
-      `fps ${fps.toFixed(0)}   tf backend: ${tfBackend} (${sim.lastFused ? 'fused rules kernel' : 'tensor-op rules'})   gpu: ${gpuName}`,
+      `fps ${fps.toFixed(0)}   gpu: ${gpuName}   world generation: TF.js on ${tfBackend}`,
       `pos ${px.toFixed(1)} ${py.toFixed(1)} ${pz.toFixed(1)}   chunk ${world.window.cx},${world.window.cz}`,
-      `chunks: ${world.activeChunks().length} active (${world.awakeCount()} awake, ${sim.growingChunks} growing plants), ${world.ghostChunks().length} ghost (halo)`,
+      `chunks: ${world.activeChunks().length} active (${world.awakeCount()} awake, ${sim.growingChunks} growing plants), ` +
+        `${world.ghostChunks().length} ghost (halo)${saved ? `, ${saved} changed ones saved` : ''}`,
+      store instanceof GpuStore
+        ? `world: in GPU memory (${(store.bytes / 2 ** 20).toFixed(1)} MB); a tick reads back ${sim.lastBatch * 4} bytes of flags`
+        : `world: on the CPU (${check.ok ? '?cpu' : `the GPU failed its check: ${check.detail}`})`,
       `block updates: ${blockUpdateStatus()}`,
       `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),

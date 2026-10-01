@@ -15,9 +15,7 @@ export interface KernelCheck {
 /**
  * Run the fused GPU kernel and the plain-JS reference on the same random cells and the
  * same random numbers, for several chained ticks, and compare every cell. Covers the plant
- * rules on and off, and output with and without the ghost border. Small enough to run at
- * startup, so a GPU or driver that computes something different can fall back to the
- * tensor-op rules.
+ * rules on and off, and output with and without the ghost border.
  */
 export async function checkFusedKernel(seed = 1234, ticks = 6): Promise<KernelCheck> {
   const rand = mulberry32(seed);

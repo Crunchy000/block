@@ -8,7 +8,10 @@ import {
 } from './blockUpdateReference';
 
 // One block-update tick as a cellular automaton over int32 cells shaped [H, Z, X],
-// or a batch [N, H, Z, X] of independent regions (the simulation batches chunks).
+// or a batch [N, H, Z, X] of independent regions, written as TF.js tensor ops. The game
+// runs the same rules as WGSL on the world in GPU memory (sim/rules.ts); the tests
+// check this version against the reference too.
+//
 // Every cell reads only its neighbours from the previous state, so all cells update
 // in parallel. Cells past a region's edge read as air (bedrock below y = 0);
 // callers surround the cells they keep with a ghost border and discard it.
@@ -42,7 +45,7 @@ const WHEAT_STAGE = table(wheatStage);
 const IS_SOIL = table(isSoil);
 
 /**
- * @param random uniform [0, 1) per cell, same shape as `cells` (see randomField). Without it
+ * @param random uniform [0, 1) per cell, same shape as `cells`. Without it
  *   the plant rules are skipped and grass, dirt and wheat are left unchanged (except for
  *   fluids washing wheat away); pass it whenever the cells contain grass, primed dirt or wheat.
  */

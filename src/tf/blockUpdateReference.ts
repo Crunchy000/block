@@ -4,8 +4,9 @@ import {
 } from '../constants';
 
 // Plain-JS, cell-at-a-time version of the block-update rules. It is the readable
-// spec for blockUpdateStep (the TF.js version) and the oracle the tests compare
-// it against. Not used at runtime.
+// spec for the WGSL rules (sim/rules.ts) and the tensor-op version (blockUpdate.ts),
+// the oracle the tests compare them against, and what CpuStore runs: the world of the
+// Node tests, and the fallback for a GPU that fails the startup check.
 
 /** Cells that hold up a fluid resting on them, and that smother grass under them: solids and fluid sources. */
 export const supports = (c: number) => isSolid(cellType(c)) || cellLevel(c) === SOURCE_LEVEL;

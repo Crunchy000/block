@@ -1,10 +1,7 @@
+import type { ChunkDraw } from '../world/world';
 import { requestGpu } from './gpu';
-import type { ChunkMesh, MeshData } from './mesher';
-import { VERTEX_FLOATS } from './mesher';
+import type { MeshPool } from './meshPool';
 import { blockShader, lineShader } from './shaders';
-
-interface GpuMesh { vertex: GPUBuffer; index: GPUBuffer; count: number }
-interface GpuChunk { opaque?: GpuMesh; water?: GpuMesh; center: [number, number, number] }
 
 export const SKY: [number, number, number] = [0.55, 0.75, 0.95];
 
@@ -28,12 +25,13 @@ export class Renderer {
   private format!: GPUTextureFormat;
   private depth?: GPUTexture;
   private uniformBuffer!: GPUBuffer;
-  private bindGroup!: GPUBindGroup;
+  private layout!: GPUBindGroupLayout;
+  private bindGroup?: GPUBindGroup;
+  private bindGroupPool?: MeshPool;
   private opaquePipeline!: GPURenderPipeline;
   private waterPipeline!: GPURenderPipeline;
   private linePipeline!: GPURenderPipeline;
   private lineBuffer?: GPUBuffer;
-  private chunks = new Map<string, GpuChunk>();
 
   private constructor(
     readonly device: GPUDevice,
@@ -61,35 +59,27 @@ export class Renderer {
     }
 
     this.uniformBuffer = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const layout = device.createBindGroupLayout({
-      entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} }],
+    // Uniforms, then the meshes' face records and chunk origins (read by the vertex shader).
+    this.layout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      ],
     });
-    this.bindGroup = device.createBindGroup({ layout, entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }] });
-    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
+    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
 
     const blockModule = device.createShaderModule({ code: blockShader });
-    const blockVertex: GPUVertexState = {
-      module: blockModule,
-      entryPoint: 'vs',
-      buffers: [{
-        arrayStride: VERTEX_FLOATS * 4,
-        attributes: [
-          { shaderLocation: 0, offset: 0, format: 'float32x3' },
-          { shaderLocation: 1, offset: 12, format: 'float32x3' },
-          { shaderLocation: 2, offset: 24, format: 'float32' },
-        ],
-      }],
-    };
     this.opaquePipeline = device.createRenderPipeline({
       layout: pipelineLayout,
-      vertex: blockVertex,
+      vertex: { module: blockModule, entryPoint: 'vsOpaque' },
       fragment: { module: blockModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
     });
     this.waterPipeline = device.createRenderPipeline({
       layout: pipelineLayout,
-      vertex: blockVertex,
+      vertex: { module: blockModule, entryPoint: 'vsWater' },
       fragment: {
         module: blockModule,
         entryPoint: 'fs',
@@ -124,32 +114,13 @@ export class Renderer {
     });
   }
 
-  private upload(mesh: MeshData): GpuMesh | undefined {
-    if (mesh.indices.length === 0) return undefined;
-    const vertex = this.device.createBuffer({ size: mesh.vertices.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-    this.device.queue.writeBuffer(vertex, 0, mesh.vertices);
-    const index = this.device.createBuffer({ size: mesh.indices.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
-    this.device.queue.writeBuffer(index, 0, mesh.indices);
-    return { vertex, index, count: mesh.indices.length };
-  }
-
-  setChunkMesh(key: string, mesh: ChunkMesh, center: [number, number, number]): void {
-    this.removeChunk(key);
-    this.chunks.set(key, { opaque: this.upload(mesh.opaque), water: this.upload(mesh.water), center });
-  }
-
-  removeChunk(key: string): void {
-    const c = this.chunks.get(key);
-    if (!c) return;
-    for (const m of [c.opaque, c.water]) {
-      m?.vertex.destroy();
-      m?.index.destroy();
-    }
-    this.chunks.delete(key);
-  }
-
-  chunkKeys(): IterableIterator<string> {
-    return this.chunks.keys();
+  private groupFor(pool: MeshPool): GPUBindGroup {
+    if (this.bindGroup && this.bindGroupPool === pool) return this.bindGroup;
+    this.bindGroupPool = pool;
+    return this.bindGroup = this.device.createBindGroup({
+      layout: this.layout,
+      entries: [this.uniformBuffer, pool.faces, pool.origins].map((buffer, binding) => ({ binding, resource: { buffer } })),
+    });
   }
 
   private resize(): void {
@@ -197,8 +168,14 @@ export class Renderer {
     return this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
   }
 
-  /** lines: interleaved [x, y, z, r, g, b] pairs for a line list. */
-  render(viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>): void {
+  /**
+   * Draw the chunks in `draws` from their meshes in `pool` (indirect draws: the counts
+   * stay on the GPU), plus lines: interleaved [x, y, z, r, g, b] pairs for a line list.
+   */
+  render(
+    viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>,
+    pool: MeshPool, draws: ChunkDraw[],
+  ): void {
     // A canvas throttles us to what the GPU can present; offscreen nothing does, and on a
     // slow GPU frames would pile up in the queue ahead of the block-update work. Skip
     // frames until the previous one is done.
@@ -227,15 +204,10 @@ export class Renderer {
       }],
       depthStencilAttachment: { view: this.depth!.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
     });
-    pass.setBindGroup(0, this.bindGroup);
+    pass.setBindGroup(0, this.groupFor(pool));
 
     pass.setPipeline(this.opaquePipeline);
-    for (const c of this.chunks.values()) {
-      if (!c.opaque) continue;
-      pass.setVertexBuffer(0, c.opaque.vertex);
-      pass.setIndexBuffer(c.opaque.index, 'uint32');
-      pass.drawIndexed(c.opaque.count);
-    }
+    for (const d of draws) pass.drawIndirect(pool.draws, pool.drawOffset(d.meshSlot));
 
     if (lines.length > 0) {
       pass.setPipeline(this.linePipeline);
@@ -245,12 +217,9 @@ export class Renderer {
 
     // Translucent water, far chunks first.
     const d2 = (p: number[]) => (p[0] - cam[0]) ** 2 + (p[1] - cam[1]) ** 2 + (p[2] - cam[2]) ** 2;
-    const water = [...this.chunks.values()].filter((c) => c.water).sort((a, b) => d2(b.center) - d2(a.center));
     pass.setPipeline(this.waterPipeline);
-    for (const c of water) {
-      pass.setVertexBuffer(0, c.water!.vertex);
-      pass.setIndexBuffer(c.water!.index, 'uint32');
-      pass.drawIndexed(c.water!.count);
+    for (const d of [...draws].sort((a, b) => d2(b.center) - d2(a.center))) {
+      pass.drawIndirect(pool.draws, pool.drawOffset(d.meshSlot) + 16);
     }
 
     pass.end();

@@ -1,124 +1,134 @@
 import {
-  Block, CHUNK_HEIGHT, CHUNK_SIZE, FALLING_LEVEL, SOURCE_LEVEL, blockIndex, cellLevel, cellType, isSolid,
+  Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, FALLING_LEVEL, SOURCE_LEVEL, cellLevel, cellType, isSolid,
 } from '../constants';
-import type { World } from '../world/world';
 
-/** Floats per vertex: position (3), normal (3), block type (1; for wheat, type + 16 * growth stage). */
-export const VERTEX_FLOATS = 7;
+// Chunk meshes are lists of face records: one u32 per quad, which the vertex shader
+// expands into the quad's two triangles (render/shaders.ts). The game meshes on the GPU
+// (render/gpuMesher.ts); meshFaces here is the same mesher in plain JS: the reference
+// the GPU tests compare against, and the mesher for the CPU fallback.
+//
+// Record layout, low bits first:
+//   x 4 | z 4 | y 6       the block, chunk-local
+//   face 4                a Face
+//   type 3                the block type
+//   aux 4                 fluids: surface height code (heightCode); wheat: growth stage; else 0
 
-export interface MeshData {
-  vertices: Float32Array<ArrayBuffer>;
-  indices: Uint32Array<ArrayBuffer>;
+export const enum Face {
+  // The six sides of a block (normals +x, -x, +y, -y, +z, -z).
+  East = 0, West, Top, Bottom, South, North,
+  // A plant is two crossed, double-sided quads: the usual way to draw one in a block world.
+  PlantA, PlantABack, PlantB, PlantBBack,
 }
 
-export interface ChunkMesh {
-  /** Stone, dirt, lava. */
-  opaque: MeshData;
-  /** Translucent water, drawn after opaque geometry. */
-  water: MeshData;
-}
+/** Records a chunk can need at most: six faces (or four plant quads) per cell. */
+export const FACE_CAPACITY = 6 * CHUNK_VOLUME;
 
-class MeshBuilder {
-  v: number[] = [];
-  i: number[] = [];
-  quad(corners: number[][], n: readonly number[], type: number): void {
-    const base = this.v.length / VERTEX_FLOATS;
-    for (const c of corners) this.v.push(c[0], c[1], c[2], n[0], n[1], n[2], type);
-    this.i.push(base, base + 1, base + 2, base, base + 2, base + 3);
-  }
-  build(): MeshData {
-    return { vertices: new Float32Array(this.v), indices: new Uint32Array(this.i) };
-  }
-}
+/** Height code of fluid with the same fluid on top of it: the block is full. */
+export const FULL_HEIGHT = 15;
 
-// For each face: normal and the 4 corner offsets (counter-clockwise seen from outside).
-const FACES = [
-  { n: [1, 0, 0], c: [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]] },
-  { n: [-1, 0, 0], c: [[0, 0, 1], [0, 1, 1], [0, 1, 0], [0, 0, 0]] },
-  { n: [0, 1, 0], c: [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]] },
-  { n: [0, -1, 0], c: [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]] },
-  { n: [0, 0, 1], c: [[1, 0, 1], [1, 1, 1], [0, 1, 1], [0, 0, 1]] },
-  { n: [0, 0, -1], c: [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]] },
-] as const;
+export const packFace = (x: number, y: number, z: number, face: Face, type: Block, aux: number): number =>
+  (x | (z << 4) | (y << 8) | (face << 14) | (type << 18) | (aux << 21)) >>> 0;
 
-/** Only full solid blocks hide a neighbour's face (fluids can be partial height). */
-const occludes = isSolid;
+export const unpackFace = (r: number) => ({
+  x: r & 15, z: (r >> 4) & 15, y: (r >> 8) & 63, face: ((r >> 14) & 15) as Face, type: ((r >> 18) & 7) as Block, aux: (r >> 21) & 15,
+});
+
+/**
+ * Surface height of a fluid block as a small code: FULL_HEIGHT with the same fluid on
+ * top, otherwise its level (1..8, 8 for a source). Higher codes are higher surfaces.
+ */
+export const heightCode = (c: number, above: number): number =>
+  cellType(above) === cellType(c) ? FULL_HEIGHT : Math.min(SOURCE_LEVEL, Math.max(1, cellLevel(c)));
+
+/** The surface height (0..1) for a height code. */
+export const fluidHeight = (code: number): number =>
+  code === FULL_HEIGHT ? 1 : code >= SOURCE_LEVEL ? 0.875 : Math.max(0.125, (code / FALLING_LEVEL) * 0.8);
 
 /** Height of a wheat plant at a growth stage, 0..1. */
 export const wheatHeight = (stage: number) => 0.25 + stage * 0.1;
 
-/** Two crossed, double-sided quads: the usual way to draw a plant in a block world. */
-function plant(builder: MeshBuilder, x: number, y: number, z: number, h: number, kind: number): void {
-  const a = 0.15, b = 0.85, up = [0, 1, 0] as const; // lit like a top face
-  for (const [x0, z0, x1, z1] of [[a, a, b, b], [b, a, a, b]]) {
-    const bottom0 = [x + x0, y, z + z0], bottom1 = [x + x1, y, z + z1];
-    const top0 = [x + x0, y + h, z + z0], top1 = [x + x1, y + h, z + z1];
-    builder.quad([bottom0, bottom1, top1, top0], up, kind);
-    builder.quad([bottom1, bottom0, top0, top1], up, kind);
-  }
-}
+type Vec3 = readonly [number, number, number];
+/** The normal of each side Face. */
+export const FACE_NORMALS: readonly Vec3[] = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+/** Corner offsets of each side Face, counter-clockwise seen from outside. */
+export const FACE_CORNERS: readonly (readonly Vec3[])[] = [
+  [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]],
+  [[0, 0, 1], [0, 1, 1], [0, 1, 0], [0, 0, 0]],
+  [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]],
+  [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
+  [[1, 0, 1], [1, 1, 1], [0, 1, 1], [0, 0, 1]],
+  [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
+];
+/** Where a plant quad runs across its block: [x0, z0, x1, z1] for PlantA (and back), PlantB (and back). */
+const PLANT_INSET = 0.15;
+export const PLANT_QUADS = [
+  [PLANT_INSET, PLANT_INSET, 1 - PLANT_INSET, 1 - PLANT_INSET],
+  [1 - PLANT_INSET, PLANT_INSET, PLANT_INSET, 1 - PLANT_INSET],
+] as const;
 
-/** Height of a fluid block's surface, 0..1. */
-function fluidHeight(c: number, above: number): number {
-  if (cellType(above) === cellType(c)) return 1;
-  const level = cellLevel(c);
-  return level >= SOURCE_LEVEL ? 0.875 : Math.max(0.125, (level / FALLING_LEVEL) * 0.8);
+export interface ChunkFaces {
+  /** Stone, dirt, grass, lava, wheat. */
+  opaque: number[];
+  /** Translucent water, drawn after opaque geometry. */
+  water: number[];
 }
 
 /**
- * Build a face-culled mesh for one chunk. Neighbouring chunks (active or ghost)
- * are read through the world so border faces are culled correctly.
+ * Face-culled mesh of one chunk. `cellAt` reads chunk-local cells: x and z from -1 to
+ * CHUNK_SIZE (the neighbouring chunks' edges, so border faces are culled correctly) and
+ * y from 0 to CHUNK_HEIGHT - 1. Records come out in cell order.
  */
-export function meshChunk(world: World, cx: number, cz: number): ChunkMesh {
-  const S = CHUNK_SIZE, H = CHUNK_HEIGHT, P = S + 2;
-  // Padded copy: 1-block border from the 4 neighbours (missing neighbours read as air).
-  const pad = new Uint8Array(P * P * H);
-  const pidx = (x: number, y: number, z: number) => (y * P + (z + 1)) * P + (x + 1);
-  const self = world.getChunk(cx, cz)!;
-  for (let y = 0; y < H; y++) {
-    for (let z = -1; z <= S; z++) {
-      for (let x = -1; x <= S; x++) {
-        const inside = x >= 0 && x < S && z >= 0 && z < S;
-        if (!inside && (x < 0 || x >= S) && (z < 0 || z >= S)) continue; // corners unused
-        pad[pidx(x, y, z)] = inside
-          ? self.data[blockIndex(x, y, z)]
-          : world.getCell(cx * S + x, y, cz * S + z);
-      }
-    }
-  }
-  const at = (x: number, y: number, z: number) =>
-    y < 0 ? Block.Stone : y >= H ? Block.Air : pad[pidx(x, y, z)];
-
-  const solid = new MeshBuilder(), water = new MeshBuilder();
-  const ox = cx * S, oz = cz * S;
-  for (let y = 0; y < H; y++) {
-    for (let z = 0; z < S; z++) {
-      for (let x = 0; x < S; x++) {
+export function meshFaces(cellAt: (x: number, y: number, z: number) => number): ChunkFaces {
+  const at = (x: number, y: number, z: number) => (y < 0 ? Block.Stone : y >= CHUNK_HEIGHT ? Block.Air : cellAt(x, y, z));
+  const opaque: number[] = [], water: number[] = [];
+  for (let y = 0; y < CHUNK_HEIGHT; y++) {
+    for (let z = 0; z < CHUNK_SIZE; z++) {
+      for (let x = 0; x < CHUNK_SIZE; x++) {
         const c = at(x, y, z), t = cellType(c);
         if (t === Block.Air) continue;
         if (t === Block.Wheat) {
-          const stage = cellLevel(c);
-          plant(solid, ox + x, y, oz + z, wheatHeight(stage), t + 16 * stage);
+          const stage = Math.min(cellLevel(c), 15);
+          for (const face of [Face.PlantA, Face.PlantABack, Face.PlantB, Face.PlantBBack]) opaque.push(packFace(x, y, z, face, t, stage));
           continue;
         }
         const fluid = t === Block.Water || t === Block.Lava;
-        const h = fluid ? fluidHeight(c, at(x, y + 1, z)) : 1;
-        for (const f of FACES) {
-          const nc = at(x + f.n[0], y + f.n[1], z + f.n[2]), nt = cellType(nc);
-          let visible: boolean;
-          if (fluid) {
-            // Against air or the other fluid; against the same fluid only where the neighbour's surface is lower.
-            visible = (nt !== t && !occludes(nt))
-              || (nt === t && f.n[1] === 0 && fluidHeight(nc, at(x + f.n[0], y + 1, z + f.n[2])) < h);
-          } else {
-            visible = !occludes(nt);
-          }
-          if (!visible) continue;
-          const corners = f.c.map((o) => [ox + x + o[0], y + (o[1] === 1 ? h : 0), oz + z + o[2]]);
-          (t === Block.Water ? water : solid).quad(corners, f.n, t);
+        const h = fluid ? heightCode(c, at(x, y + 1, z)) : 0;
+        for (let f = Face.East; f <= Face.North; f++) {
+          const [nx, ny, nz] = FACE_NORMALS[f];
+          const nc = at(x + nx, y + ny, z + nz), nt = cellType(nc);
+          // Only full solid blocks hide a neighbour's face (fluids can be partial height).
+          // Fluid shows against air or the other fluid, and against the same fluid only
+          // where the neighbour's surface is lower.
+          const visible = fluid
+            ? (nt !== t && !isSolid(nt)) || (nt === t && ny === 0 && heightCode(nc, at(x + nx, y + 1, z + nz)) < h)
+            : !isSolid(nt);
+          if (visible) (t === Block.Water ? water : opaque).push(packFace(x, y, z, f, t, h));
         }
       }
     }
   }
-  return { opaque: solid.build(), water: water.build() };
+  return { opaque, water };
+}
+
+export interface Quad {
+  /** Four corners in world space; triangles (0, 1, 2) and (0, 2, 3). */
+  corners: number[][];
+  normal: readonly number[];
+  /** Block type, plus 16 x growth stage for wheat (what the fragment shader gets). */
+  kind: number;
+}
+
+/** The quad a face record draws, for a chunk whose corner is at world (ox, 0, oz): what the vertex shader does. */
+export function faceQuad(record: number, ox: number, oz: number): Quad {
+  const { x, y, z, face, type, aux } = unpackFace(record);
+  const bx = ox + x, bz = oz + z;
+  if (face >= Face.PlantA) {
+    const [x0, z0, x1, z1] = PLANT_QUADS[(face - Face.PlantA) >> 1], h = wheatHeight(aux);
+    const b0 = [bx + x0, y, bz + z0], b1 = [bx + x1, y, bz + z1], t0 = [bx + x0, y + h, bz + z0], t1 = [bx + x1, y + h, bz + z1];
+    const front = (face - Face.PlantA) % 2 === 0;
+    return { corners: front ? [b0, b1, t1, t0] : [b1, b0, t0, t1], normal: [0, 1, 0], kind: type + 16 * aux };
+  }
+  const h = type === Block.Water || type === Block.Lava ? fluidHeight(aux) : 1;
+  const corners = FACE_CORNERS[face].map((o) => [bx + o[0], y + (o[1] === 1 ? h : 0), bz + o[2]]);
+  return { corners, normal: FACE_NORMALS[face], kind: type };
 }
