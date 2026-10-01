@@ -84,6 +84,8 @@ async function main(): Promise<void> {
 
   // The start screen starts play: a tap gets on-screen touch controls, a mouse click captures the mouse.
   // (Safari's click events don't say which pointer made them, so remember it from pointerdown.)
+  // The benchmark link sits on the start screen; following it shouldn't start the game too.
+  $('bench-link').addEventListener('click', (e) => e.stopPropagation());
   let startPointer = 'mouse';
   overlay.addEventListener('pointerdown', (e) => { startPointer = e.pointerType; });
   overlay.addEventListener('click', (e) => {

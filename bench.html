@@ -5,19 +5,61 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Block Benchmark</title>
     <style>
-      body { margin: 0; padding: 16px; background: #111; color: #ddd; font: 13px/1.5 ui-monospace, Menlo, Consolas, monospace; }
-      h1 { font-size: 18px; margin: 0 0 8px; }
-      p { margin: 0 0 12px; max-width: 760px; }
-      pre { white-space: pre; overflow-x: auto; margin: 0; }
+      :root { color-scheme: dark; }
+      body { margin: 0; background: #0f1115; color: #d8dbe2; font: 14px/1.55 ui-monospace, Menlo, Consolas, monospace; }
+      main { max-width: 780px; margin: 0 auto; padding: 24px 16px 48px; }
+      h1 { font-size: 20px; margin: 0 0 4px; color: #fff; }
+      h2 { font-size: 15px; margin: 0 0 10px; color: #fff; }
+      p { margin: 0 0 12px; }
+      .lead, .muted { color: #9aa3b2; }
+      .card { background: #171a21; border: 1px solid #262b36; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+      .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+      button { font: inherit; padding: 10px 18px; border-radius: 8px; border: 1px solid #3b82f6; background: #2563eb; color: #fff; cursor: pointer; }
+      button.secondary { background: transparent; border-color: #3a4150; color: #d8dbe2; }
+      button:disabled { opacity: .5; cursor: default; }
+      .progress { height: 4px; background: #262b36; border-radius: 2px; overflow: hidden; margin-top: 14px; }
+      .progress > div { height: 100%; width: 0; background: #3b82f6; transition: width .2s; }
+      .headline { font-size: 36px; font-weight: 700; color: #fff; line-height: 1.2; }
+      .headline .unit { font-size: 16px; font-weight: 400; color: #9aa3b2; }
+      .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 14px 0; }
+      .stat { background: #12151b; border: 1px solid #262b36; border-radius: 8px; padding: 10px 12px; }
+      .stat b { display: block; font-size: 18px; color: #fff; }
+      .table-wrap { overflow-x: auto; }
+      table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+      th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid #262b36; white-space: nowrap; }
+      th:first-child, td:first-child { text-align: left; }
+      th { color: #9aa3b2; font-weight: 400; }
+      tr.best td { color: #fff; font-weight: 700; }
+      pre { white-space: pre; overflow-x: auto; margin: 12px 0 0; }
+      pre:empty { display: none; }
       a { color: #8cf; }
+      .error { color: #ff8a80; }
     </style>
   </head>
   <body>
-    <h1>Block: block-update benchmark</h1>
-    <p>Runs world generation and block updates through the same TF.js code as the game, on this
-      device's GPU. URL options: <code>?ticks=600</code> (takeover length), <code>?spread=</code> /
-      <code>?grow=</code> (plant chances per tick). <a href="./">Back to the game</a></p>
-    <pre id="out"></pre>
+    <main>
+      <h1>Block update benchmark</h1>
+      <p class="lead">How many block updates this device computes per second, using the game's own
+        TF.js rules (fluids, grass, wheat) on its GPU. <a href="./">Back to the game</a></p>
+
+      <div class="card">
+        <div class="controls">
+          <button id="start">Start benchmark</button>
+          <span id="status" class="muted">Takes about half a minute. Keep this tab in front while it runs.</span>
+        </div>
+        <div class="progress"><div id="bar"></div></div>
+      </div>
+
+      <div class="card" id="result" hidden></div>
+
+      <div class="card">
+        <h2>Grass and wheat takeover</h2>
+        <p class="muted">Runs the game's simulation around spawn as grass spreads and wheat grows, ticks back to
+          back, and logs batch sizes and tick times as the plants take over.</p>
+        <div class="controls"><button id="takeover" class="secondary">Run takeover</button></div>
+        <pre id="log"></pre>
+      </div>
+    </main>
     <script type="module" src="/src/bench.ts"></script>
   </body>
 </html>

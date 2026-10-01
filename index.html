@@ -26,6 +26,8 @@
       #error { color: #ff8a80; max-width: 640px; margin: 0 auto 8px; }
       #error:empty { display: none; }
       .help { opacity: .8; }
+      .bench-link { display: inline-block; margin-top: 16px; padding: 7px 16px; border: 1px solid rgba(255,255,255,.45); border-radius: 8px; color: #fff; text-decoration: none; font-size: 13px; }
+      .bench-link:hover, .bench-link:focus-visible { background: rgba(255,255,255,.15); }
       .help.touch { display: none; }
       @media (pointer: coarse) {
         .help.touch { display: block; }
@@ -93,6 +95,7 @@
         <div class="help touch">Left side: drag to move (double-tap and hold to sprint)<br />
         Right side: drag to look · ▲ ▼ fly<br />
         Break / Place act on the block under the crosshair · tap a block below to choose it</div>
+        <a id="bench-link" class="bench-link" href="./bench.html?start">Benchmark this device: block updates per second</a>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

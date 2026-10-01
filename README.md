@@ -30,9 +30,14 @@ URL params: `?radius=N` active radius in chunks (default 3) · `pos=x,y,z` · `y
 `grow=` wheat growth chance per tick (default 1/40, 1/12 next to water) · `offscreen` (render to a
 texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available).
 
-**Benchmark:** `bench.html` (on Pages: `https://<owner>.github.io/<repo>/bench.html`) runs world
-generation and block updates through the game's code on your GPU: the cost of one tick by batch size,
-with and without the plant rules, and a grass-and-wheat "takeover" around spawn with per-tick timings.
+**Benchmark:** the start screen's *Benchmark this device* button opens `bench.html`
+(`https://<owner>.github.io/<repo>/bench.html`), which measures **block updates per second** on your GPU
+with the game's code. One block update is one cell's next state for one tick (ghost border cells don't
+count). Press *Start benchmark*: it runs the game's tick loop (pack chunks with their ghost borders,
+TF.js step with every rule, read back, compare) for batches of 1 to 100 chunks, reports the best rate and
+how many chunks that could keep updating at 5 ticks per second, a "GPU only" rate with the state kept on
+the GPU between steps (the ceiling without per-tick data movement), and the rate with fluid rules only.
+*Run takeover* simulates grass and wheat taking over the terrain around spawn and logs tick times.
 
 ## Layout
 
