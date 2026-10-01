@@ -21,8 +21,8 @@ struct VSOut {
 fn vs(@location(0) pos: vec3f, @location(1) normal: vec3f, @location(2) kind: f32) -> VSOut {
   var o: VSOut;
   var p = pos;
-  // Gentle bob on fluid surfaces.
-  if (kind > 2.5 && normal.y > 0.5) {
+  // Gentle bob on fluid surfaces (water 3, lava 4).
+  if (kind > 2.5 && kind < 4.5 && normal.y > 0.5) {
     p.y += 0.04 * sin(u.camPos.w * 2.0 + pos.x * 0.7 + pos.z * 0.9) - 0.04;
   }
   o.pos = u.viewProj * vec4f(p, 1.0);
@@ -46,7 +46,9 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   var base: vec3f;
   var alpha = 1.0;
   var emissive = 0.0;
-  switch in.kind {
+  // Block type in the low 4 bits; wheat carries its growth stage above them.
+  let stage = in.kind >> 4u;
+  switch in.kind & 15u {
     case 1u: { base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n); }               // stone
     case 2u: { base = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n); }               // dirt
     case 3u: {                                                                    // water
@@ -58,6 +60,24 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       let flow = 0.5 + 0.5 * sin(t * 2.0 + n * 6.28 + in.world.x * 0.5 - in.world.z * 0.4);
       base = mix(vec3f(0.85, 0.25, 0.02), vec3f(1.0, 0.75, 0.15), flow * (0.6 + 0.4 * n));
       emissive = 1.0;
+    }
+    case 5u: {                                                                    // grass
+      let dirt = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n);
+      let green = vec3f(0.36, 0.62, 0.22) * (0.8 + 0.3 * n);
+      // Green on top; on the sides a ragged green fringe over dirt; dirt underneath.
+      let row = floor(fract(in.world.y) * 8.0);
+      let fringe = row >= 7.0 || (row >= 6.0 && n > 0.55);
+      base = select(dirt, green, in.normal.y > 0.5 || (abs(in.normal.y) < 0.5 && fringe));
+    }
+    case 6u: {                                                                    // wheat
+      let h = 0.25 + f32(stage) * 0.1;
+      let along = fract(in.world.x + in.world.z * 0.37); // across the crossed quads
+      let up = fract(in.world.y) / h;                    // 0 at the soil, 1 at the tip
+      let ear = stage >= 4u && up > 0.7;
+      // Four thin stalks, thicker ears near the tip once it has grown a while; the rest is see-through.
+      if (abs(fract(along * 4.0) - 0.5) > select(0.12, 0.3, ear)) { discard; }
+      base = mix(vec3f(0.30, 0.62, 0.20), vec3f(0.88, 0.74, 0.32), f32(stage) / 7.0) * (0.8 + 0.3 * n);
+      if (ear) { base *= 0.85; }
     }
     default: { base = vec3f(1.0, 0.0, 1.0); }
   }

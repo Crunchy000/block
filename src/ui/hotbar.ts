@@ -1,13 +1,13 @@
 import { BLOCK_NAMES, Block } from '../constants';
 
-/** Placeable blocks, in hotbar order (keys 1–4). */
-export const HOTBAR_BLOCKS = [Block.Dirt, Block.Stone, Block.Water, Block.Lava] as const;
+/** Placeable blocks, in hotbar order (keys 1–6). Wheat is planted as a seedling on dirt or grass. */
+export const HOTBAR_BLOCKS = [Block.Dirt, Block.Stone, Block.Water, Block.Lava, Block.Grass, Block.Wheat] as const;
 
 export interface Hotbar {
   setSelected(block: Block): void;
 }
 
-/** Block picker along the bottom of the screen. Tapping a slot selects it; keys 1–4 do the same. */
+/** Block picker along the bottom of the screen. Tapping a slot selects it; keys 1–6 do the same. */
 export function createHotbar(onSelect: (block: Block) => void, parent: HTMLElement = document.body): Hotbar {
   const bar = document.createElement('div');
   bar.className = 'hotbar';

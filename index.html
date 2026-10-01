@@ -32,7 +32,7 @@
         .help.keys { display: none; }
       }
 
-      /* Block hotbar (keys 1–4, or tap). */
+      /* Block hotbar (keys 1–6, or tap). */
       .hotbar { position: fixed; z-index: 3; left: 50%; bottom: calc(10px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; gap: 6px; padding: 5px; background: rgba(0,0,0,.35); border-radius: 10px; }
       .slot { position: relative; width: 44px; height: 44px; padding: 0; border: 2px solid rgba(255,255,255,.25); border-radius: 7px; background: none; cursor: pointer; }
       .slot.selected { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
@@ -41,6 +41,8 @@
       .block-stone .swatch { background: #808085; }
       .block-water .swatch { background: #3366cc; }
       .block-lava .swatch { background: linear-gradient(135deg, #ffb020, #e2400a); }
+      .block-grass .swatch { background: linear-gradient(#5d9e38 0 40%, #8c613d 40%); }
+      .block-wheat .swatch { background: repeating-linear-gradient(90deg, #d9b54a 0 3px, transparent 3px 7px), linear-gradient(transparent 70%, #8c613d 70%); }
       .slot .key { position: absolute; right: 3px; bottom: 1px; font-size: 10px; color: #fff; text-shadow: 0 1px 2px #000; }
 
       /* Touch controls. */
@@ -86,7 +88,7 @@
         <div id="status">Loading…</div>
         <div id="error"></div>
         <div class="help keys">WASD move · Space/Shift up/down · Ctrl sprint · Esc release mouse<br />
-        Left click break · Right click place · 1 dirt · 2 stone · 3 water · 4 lava<br />
+        Left click break · Right click place · 1 dirt · 2 stone · 3 water · 4 lava · 5 grass · 6 wheat<br />
         G toggle chunk/ghost-halo outlines · P pause block updates</div>
         <div class="help touch">Left side: drag to move (double-tap and hold to sprint)<br />
         Right side: drag to look · ▲ ▼ fly<br />

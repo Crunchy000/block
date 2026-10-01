@@ -1,3 +1,4 @@
+import { requestGpu } from './gpu';
 import type { ChunkMesh, MeshData } from './mesher';
 import { VERTEX_FLOATS } from './mesher';
 import { blockShader, lineShader } from './shaders';
@@ -22,6 +23,8 @@ export class Renderer {
   private colorTarget?: GPUTexture;
   private readback?: GPUBuffer;
   private reading = false;
+  /** Offscreen mode only: a submitted frame the GPU hasn't finished yet. */
+  private frameInFlight = false;
   private format!: GPUTextureFormat;
   private depth?: GPUTexture;
   private uniformBuffer!: GPUBuffer;
@@ -40,23 +43,8 @@ export class Renderer {
   ) {}
 
   static async create(canvas: HTMLCanvasElement, options: RendererOptions = {}): Promise<Renderer> {
-    if (!navigator.gpu) throw new Error('WebGPU is not supported in this browser.');
-    const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
-    if (!adapter) throw new Error('No WebGPU adapter found.');
-    // The same device also runs TF.js compute, so ask for the limits its kernels want.
-    const l = adapter.limits;
-    const device = await adapter.requestDevice({
-      requiredLimits: {
-        maxComputeWorkgroupStorageSize: l.maxComputeWorkgroupStorageSize,
-        maxComputeWorkgroupsPerDimension: l.maxComputeWorkgroupsPerDimension,
-        maxStorageBufferBindingSize: l.maxStorageBufferBindingSize,
-        maxBufferSize: l.maxBufferSize,
-        maxComputeWorkgroupSizeX: l.maxComputeWorkgroupSizeX,
-        maxComputeInvocationsPerWorkgroup: l.maxComputeInvocationsPerWorkgroup,
-      },
-    });
-    device.lost.then((info) => console.error('WebGPU device lost:', info.message));
-    const r = new Renderer(device, adapter.info, canvas, options);
+    const { device, info } = await requestGpu();
+    const r = new Renderer(device, info, canvas, options);
     r.init();
     return r;
   }
@@ -211,6 +199,10 @@ export class Renderer {
 
   /** lines: interleaved [x, y, z, r, g, b] pairs for a line list. */
   render(viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>): void {
+    // A canvas throttles us to what the GPU can present; offscreen nothing does, and on a
+    // slow GPU frames would pile up in the queue ahead of the block-update work. Skip
+    // frames until the previous one is done.
+    if (this.options.offscreen && this.frameInFlight) return;
     this.resize();
     const { device } = this;
     const u = new Float32Array(24);
@@ -265,5 +257,9 @@ export class Renderer {
     const afterSubmit = this.present(encoder);
     device.queue.submit([encoder.finish()]);
     afterSubmit?.();
+    if (this.options.offscreen) {
+      this.frameInFlight = true;
+      device.queue.onSubmittedWorkDone().finally(() => { this.frameInFlight = false; });
+    }
   }
 }

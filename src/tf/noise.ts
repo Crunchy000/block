@@ -4,12 +4,31 @@ import * as tf from '@tensorflow/tfjs';
 // of chunks is evaluated in parallel on the TF backend.
 
 /** Classic shader hash: fract(sin(dot(p, k)) * 43758.5453) in [0, 1). */
-function hash(...coords: tf.Tensor[]): tf.Tensor {
+export function hash(...coords: tf.Tensor[]): tf.Tensor {
   const k = [127.1, 311.7, 74.7];
   let dot = coords[0].mul(k[0]);
   for (let i = 1; i < coords.length; i++) dot = dot.add(coords[i].mul(k[i]));
   const s = dot.sin().mul(43758.5453);
   return s.sub(s.floor());
+}
+
+/**
+ * Sine-free 2D hash (Dave Hoskins' hash12) in [0, 1), for per-column decisions.
+ * The sine hash above loses most of its precision at large coordinates in float32,
+ * so coordinates are wrapped to [0, 4096) first. The result still only resolves
+ * about 1/512, so combine independent hashes for rarer events.
+ */
+export function hash12(x: tf.Tensor, z: tf.Tensor, seed: number): tf.Tensor {
+  return tf.tidy(() => {
+    const wrap = (t: tf.Tensor) => t.sub(t.div(4096).floor().mul(4096));
+    const fract = (t: tf.Tensor) => t.sub(t.floor());
+    // p3 = fract(p.xyx * .1031), written as (a, b, a)
+    const a = fract(wrap(x).add(seed).mul(0.1031)), b = fract(wrap(z).add(seed * 0.618).mul(0.1031));
+    // p3 += dot(p3, p3.yzx + 33.33)
+    const d = a.mul(b.add(33.33)).add(b.mul(a.add(33.33))).add(a.mul(a.add(33.33)));
+    // fract((p3.x + p3.y) * p3.z)
+    return fract(a.add(b).add(d.mul(2)).mul(a.add(d)));
+  });
 }
 
 const smooth = (t: tf.Tensor) => t.mul(t).mul(t.mul(-2).add(3));

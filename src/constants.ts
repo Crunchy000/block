@@ -22,13 +22,16 @@ export const enum Block {
   Dirt = 2,
   Water = 3,
   Lava = 4,
+  Grass = 5,
+  Wheat = 6,
 }
 
-export const BLOCK_NAMES = ['air', 'stone', 'dirt', 'water', 'lava'] as const;
+export const BLOCK_NAMES = ['air', 'stone', 'dirt', 'water', 'lava', 'grass', 'wheat'] as const;
 
 /**
- * Fluid level, stored in the high bits of a cell (cell = type + LEVEL_MUL * level).
- * SOURCE_LEVEL marks a source block; 1..7 are flowing; 0 for non-fluids.
+ * Level, stored in the high bits of a cell (cell = type + LEVEL_MUL * level).
+ * Fluids: SOURCE_LEVEL marks a source block; 1..7 are flowing.
+ * Dirt: 1 marks PRIMED_DIRT (see below). Wheat: growth stage 0..WHEAT_RIPE. Everything else: 0.
  */
 export const LEVEL_MUL = 8;
 export const SOURCE_LEVEL = 8;
@@ -40,7 +43,42 @@ export const cell = (type: Block, level = 0): number => type + LEVEL_MUL * level
 export const cellType = (c: number): Block => (c & 7) as Block;
 export const cellLevel = (c: number): number => c >> 3;
 
-export const isSolid = (t: Block): boolean => t === Block.Stone || t === Block.Dirt;
+/**
+ * Dirt that grass can spread onto this tick: air above it and living grass in reach.
+ * The block-update step recomputes the flag every tick. It changes nothing about how
+ * the block looks or behaves; it lets the scheduler see that a chunk still has
+ * grass to grow (a random process, so "nothing changed" doesn't mean "settled").
+ */
+export const PRIMED_DIRT = cell(Block.Dirt, 1);
+
+/** Chance per tick that primed dirt turns into grass (5 ticks / second, so ~3 s per block). */
+export const GRASS_SPREAD_CHANCE = 1 / 16;
+
+/** Wheat grows through stages 0..7 and stops when ripe. */
+export const WHEAT_RIPE = 7;
+/** Chance per tick that wheat grows a stage (~8 s per stage, ~1 minute to ripen). */
+export const WHEAT_GROW_CHANCE = 1 / 40;
+/** With water beside its soil (or beside the plant) wheat grows faster (~2.5 s per stage). */
+export const WHEAT_GROW_CHANCE_WET = 1 / 12;
+
+/** Per-tick chances for the random plant rules. */
+export interface PlantRates {
+  grassSpread: number;
+  wheatGrow: number;
+  wheatGrowWet: number;
+}
+export const DEFAULT_RATES: PlantRates = {
+  grassSpread: GRASS_SPREAD_CHANCE, wheatGrow: WHEAT_GROW_CHANCE, wheatGrowWet: WHEAT_GROW_CHANCE_WET,
+};
+
+/** Cells with plant rules, which need random numbers each tick: grass, primed dirt and wheat. */
+export const isPlant = (c: number): boolean =>
+  cellType(c) === Block.Grass || cellType(c) === Block.Wheat || c === PRIMED_DIRT;
+/** Plant cells that may still change by chance: primed dirt, and wheat that isn't ripe. */
+export const isGrowing = (c: number): boolean =>
+  c === PRIMED_DIRT || (cellType(c) === Block.Wheat && cellLevel(c) < WHEAT_RIPE);
+
+export const isSolid = (t: Block): boolean => t === Block.Stone || t === Block.Dirt || t === Block.Grass;
 export const isFluid = (t: Block): boolean => t === Block.Water || t === Block.Lava;
 
 /** Index into a chunk's data array; layout is [y][z][x] to match the [H, Z, X] tensors. */

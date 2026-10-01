@@ -1,9 +1,9 @@
 import {
-  Block, CHUNK_HEIGHT, CHUNK_SIZE, FALLING_LEVEL, SOURCE_LEVEL, blockIndex, cellLevel, cellType,
+  Block, CHUNK_HEIGHT, CHUNK_SIZE, FALLING_LEVEL, SOURCE_LEVEL, blockIndex, cellLevel, cellType, isSolid,
 } from '../constants';
 import type { World } from '../world/world';
 
-/** Floats per vertex: position (3), normal (3), block type (1). */
+/** Floats per vertex: position (3), normal (3), block type (1; for wheat, type + 16 * growth stage). */
 export const VERTEX_FLOATS = 7;
 
 export interface MeshData {
@@ -42,7 +42,21 @@ const FACES = [
 ] as const;
 
 /** Only full solid blocks hide a neighbour's face (fluids can be partial height). */
-const occludes = (t: Block) => t === Block.Stone || t === Block.Dirt;
+const occludes = isSolid;
+
+/** Height of a wheat plant at a growth stage, 0..1. */
+export const wheatHeight = (stage: number) => 0.25 + stage * 0.1;
+
+/** Two crossed, double-sided quads: the usual way to draw a plant in a block world. */
+function plant(builder: MeshBuilder, x: number, y: number, z: number, h: number, kind: number): void {
+  const a = 0.15, b = 0.85, up = [0, 1, 0] as const; // lit like a top face
+  for (const [x0, z0, x1, z1] of [[a, a, b, b], [b, a, a, b]]) {
+    const bottom0 = [x + x0, y, z + z0], bottom1 = [x + x1, y, z + z1];
+    const top0 = [x + x0, y + h, z + z0], top1 = [x + x1, y + h, z + z1];
+    builder.quad([bottom0, bottom1, top1, top0], up, kind);
+    builder.quad([bottom1, bottom0, top0, top1], up, kind);
+  }
+}
 
 /** Height of a fluid block's surface, 0..1. */
 function fluidHeight(c: number, above: number): number {
@@ -82,6 +96,11 @@ export function meshChunk(world: World, cx: number, cz: number): ChunkMesh {
       for (let x = 0; x < S; x++) {
         const c = at(x, y, z), t = cellType(c);
         if (t === Block.Air) continue;
+        if (t === Block.Wheat) {
+          const stage = cellLevel(c);
+          plant(solid, ox + x, y, oz + z, wheatHeight(stage), t + 16 * stage);
+          continue;
+        }
         const fluid = t === Block.Water || t === Block.Lava;
         const h = fluid ? fluidHeight(c, at(x, y + 1, z)) : 1;
         for (const f of FACES) {

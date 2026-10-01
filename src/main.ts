@@ -1,5 +1,5 @@
 import * as tf from '@tensorflow/tfjs';
-import { Block, CHUNK_HEIGHT, CHUNK_SIZE, SOURCE_LEVEL, BLOCK_NAMES, cell } from './constants';
+import { Block, CHUNK_HEIGHT, CHUNK_SIZE, DEFAULT_RATES, SOURCE_LEVEL, BLOCK_NAMES, cell } from './constants';
 import { Controls } from './player/controls';
 import { TouchControls } from './player/touchControls';
 import { raycast, type RayHit } from './player/raycast';
@@ -60,8 +60,15 @@ async function main(): Promise<void> {
 
   const radius = params.has('radius') ? Math.max(1, Number(params.get('radius'))) : undefined;
   const world = radius ? new World(radius, radius + 1) : new World();
-  const sim = new Simulation(world);
-  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&offscreen
+  // ?spread= / ?grow= tune the per-tick chances of grass spreading (default 1/16; 0 stops it)
+  // and wheat growing a stage (default 1/40, and 1/12 next to water; ?grow= sets both).
+  const chance = (name: string) => Math.min(1, Math.max(0, Number(params.get(name))));
+  const sim = new Simulation(world, {
+    ...DEFAULT_RATES,
+    ...(params.has('spread') && { grassSpread: chance('spread') }),
+    ...(params.has('grow') && { wheatGrow: chance('grow'), wheatGrowWet: chance('grow') }),
+  });
+  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen
   const pos = (params.get('pos') ?? '8,52,8').split(',').map(Number) as [number, number, number];
   const controls = new Controls(canvas, pos);
   if (params.has('yaw')) controls.yaw = Number(params.get('yaw'));
@@ -188,13 +195,13 @@ async function main(): Promise<void> {
   };
 
   const blockUpdateStatus = () => {
-    const [rx, rz] = sim.lastRegion;
+    const batch = `${sim.lastBatch} chunk${sim.lastBatch === 1 ? '' : 's'}${sim.lastPlants ? ' + plants' : ''}`;
     if (paused) return 'paused';
     if (!world.haloReady()) return 'waiting for terrain';
-    if (world.locked) return `running tick ${sim.ticks + 1} over ${rx}x${rz} chunks…`;
+    if (world.locked) return `running tick ${sim.ticks + 1} on ${batch}…`;
     if (sim.ticks === 0) return 'starting…';
     if (sim.asleep) return `asleep after tick ${sim.ticks} (nothing changing)`;
-    return `tick ${sim.ticks}: ${rx}x${rz} chunks, ${sim.lastTickMs.toFixed(0)} ms ` +
+    return `tick ${sim.ticks}: ${batch}, ${sim.lastTickMs.toFixed(0)} ms ` +
       `(main thread ${sim.lastCpuMs.toFixed(0)} ms), ${sim.lastChangedChunks} changed`;
   };
 
@@ -230,7 +237,7 @@ async function main(): Promise<void> {
     hud.textContent = [
       `fps ${fps.toFixed(0)}   tf backend: ${tfBackend}   gpu: ${gpuName}`,
       `pos ${px.toFixed(1)} ${py.toFixed(1)} ${pz.toFixed(1)}   chunk ${world.window.cx},${world.window.cz}`,
-      `chunks: ${world.activeChunks().length} active (${world.awakeCount()} awake), ${world.ghostChunks().length} ghost (halo)`,
+      `chunks: ${world.activeChunks().length} active (${world.awakeCount()} awake, ${sim.growingChunks} growing plants), ${world.ghostChunks().length} ghost (halo)`,
       `block updates: ${blockUpdateStatus()}`,
       `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),

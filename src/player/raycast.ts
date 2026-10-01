@@ -1,4 +1,4 @@
-import { Block } from '../constants';
+import { Block, isSolid } from '../constants';
 
 export interface RayHit {
   /** Block that was hit. */
@@ -7,7 +7,7 @@ export interface RayHit {
   before: [number, number, number];
 }
 
-/** Voxel DDA (Amanatides & Woo). Fluids are passed through; only stone/dirt are hit. */
+/** Voxel DDA (Amanatides & Woo). Fluids are passed through; solid blocks and plants (wheat) are hit. */
 export function raycast(
   getBlock: (x: number, y: number, z: number) => Block,
   origin: readonly number[], dir: readonly number[], maxDist: number,
@@ -24,7 +24,7 @@ export function raycast(
   let t = 0;
   while (t <= maxDist) {
     const b = getBlock(pos[0], pos[1], pos[2]);
-    if (b === Block.Stone || b === Block.Dirt) {
+    if (isSolid(b) || b === Block.Wheat) {
       return { block: [pos[0], pos[1], pos[2]], before: [prev[0], prev[1], prev[2]] };
     }
     prev = [...pos];

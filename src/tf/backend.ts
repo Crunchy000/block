@@ -2,6 +2,8 @@ import * as tf from '@tensorflow/tfjs';
 import { WebGPUBackend } from '@tensorflow/tfjs-backend-webgpu';
 import { CHUNK_HEIGHT, CHUNK_SIZE } from '../constants';
 import { blockUpdateStep } from './blockUpdate';
+import { randomField } from './random';
+import { HALO, PADDED } from './simulation';
 import { GEN_BATCH, generateChunksTensor } from './worldgen';
 
 /**
@@ -70,13 +72,18 @@ export async function warmUpKernels(): Promise<void> {
   const flag = backend === 'webgpu' ? 'WEBGPU_ENGINE_COMPILE_ONLY' : backend === 'webgl' ? 'ENGINE_COMPILE_ONLY' : null;
   if (!flag) return; // CPU has nothing to compile
   const coords = Array.from({ length: GEN_BATCH }, (_, i) => ({ cx: i, cz: 0 }));
-  // A 3x3-chunk region: the smallest a tick ever simulates (one chunk + ghost border).
-  const region = [CHUNK_HEIGHT, 3 * CHUNK_SIZE, 3 * CHUNK_SIZE] as [number, number, number];
+  // A batch of padded chunks as the simulation sends them. With 8 chunks even the
+  // per-axis terms of the random field are big enough to run on the GPU, as they do
+  // for real batches (TF.js runs ops on tiny CPU-side tensors on the CPU instead).
+  const batch = [8, CHUNK_HEIGHT, PADDED, PADDED] as const;
+  const interior = (t: tf.Tensor4D) => t.slice([0, 0, HALO, HALO], [batch[0], CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_SIZE]);
   tf.env().set(flag, true);
   try {
     tf.tidy(() => {
       generateChunksTensor(coords);
-      blockUpdateStep(tf.zeros(region, 'int32')).slice([0, CHUNK_SIZE, CHUNK_SIZE], [CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_SIZE]);
+      const cells = tf.zeros([...batch], 'int32') as tf.Tensor4D;
+      interior(blockUpdateStep(cells));
+      interior(blockUpdateStep(cells, randomField(batch, [1, 2, 3])));
     });
     await (tf.backend() as unknown as { checkCompileCompletionAsync(): Promise<unknown> }).checkCompileCompletionAsync();
   } finally {

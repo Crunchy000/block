@@ -12,7 +12,7 @@ npm run build
 
 **Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD move ·
 Space / Shift up/down · Ctrl sprint · left click break · right click place ·
-`1` dirt `2` stone `3` water `4` lava · `G` chunk / ghost-halo outlines · `P` pause block updates.
+`1` dirt `2` stone `3` water `4` lava `5` grass `6` wheat · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
 **Touch (phones, tablets):** tap the start screen for on-screen controls. The left half of the screen
 is a **dynamic stick**: it appears wherever your thumb lands, is analog (push further to go faster),
@@ -26,8 +26,13 @@ Every push is built and tested by `.github/workflows/pages.yml`; pushes to the d
 published to GitHub Pages at `https://<owner>.github.io/<repo>/`.
 
 URL params: `?radius=N` active radius in chunks (default 3) · `pos=x,y,z` · `yaw=` / `pitch=` (radians) ·
-`chunks` (outlines on) · `offscreen` (render to a texture and copy it to a 2D canvas, for
-headless browsers where WebGPU canvas presentation isn't available).
+`chunks` (outlines on) · `spread=` grass spread chance per tick (default 1/16, 0 = never) ·
+`grow=` wheat growth chance per tick (default 1/40, 1/12 next to water) · `offscreen` (render to a
+texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available).
+
+**Benchmark:** `bench.html` (on Pages: `https://<owner>.github.io/<repo>/bench.html`) runs world
+generation and block updates through the game's code on your GPU: the cost of one tick by batch size,
+with and without the plant rules, and a grass-and-wheat "takeover" around spawn with per-tick timings.
 
 ## Layout
 
@@ -38,7 +43,8 @@ headless browsers where WebGPU canvas presentation isn't available).
 | `src/tf/noise.ts` | Value noise / fBm built from elementwise tensor ops |
 | `src/tf/blockUpdate.ts` | One block-update tick as a cellular automaton over an `[H, Z, X]` int32 tensor |
 | `src/tf/blockUpdateReference.ts` | The same rules written cell by cell in plain JS: the readable spec, and the oracle the tests compare the TF.js step against |
-| `src/tf/simulation.ts` | Packs the awake chunks + a ghost border into one tensor, steps it, writes back the interior only |
+| `src/tf/simulation.ts` | Batches the awake chunks, each with a one-cell ghost border, steps them, writes back the interiors |
+| `src/tf/random.ts` | Per-cell random numbers made on the GPU (a hash), for the random plant rules |
 | `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`**; falls back to WebGL, then CPU; pre-compiles kernels |
 | `src/world/` | Chunk store, active area / ghost halo tracking, awake (sleeping) chunks, queued edits |
 | `src/render/` | Face-culling mesher, WGSL shaders, WebGPU renderer (opaque pass, line pass, translucent water pass) |
@@ -63,15 +69,22 @@ become active (they get meshed and simulated), active chunks that drop out becom
 chunks that leave the halo are dropped. Edited chunks are kept, so changes persist.
 Press `G` to see active (green) and ghost (orange) outlines.
 
-## Sleeping chunks
+## Sleeping chunks and batches
 
 Most of the world is static most of the time, so block updates only run where something can change.
-A chunk is **awake** after an edit, when it's freshly generated or becomes active, or when a
-neighbouring chunk changed along their shared border. Each tick (5 per second) simulates the bounding
-box of the awake chunks plus a one-chunk ghost border, then writes back only the interior.
-A chunk that didn't change, with neighbours that didn't change, is a fixed point of the rules, so it
-goes back to sleep. With nothing changing, no tick runs at all.
-The HUD shows whether updates are asleep and how big the last region was.
+A chunk is **awake** after an edit, when it's freshly generated or becomes active, when a neighbouring
+chunk changed along their shared border (or corner, since grass spreads diagonally), or while it has
+plants that can still change by chance. Each tick (5 per second) packs the awake chunks into one batch
+`[N, 64, 18, 18]`: every chunk with a one-cell ghost border copied from its neighbours. The rules only
+look one cell sideways, so that border is enough, and cost scales with the number of awake chunks
+wherever they are. Only the 16×16 interiors are read back and written.
+
+A chunk that didn't change, with neighbours that didn't change, is a fixed point of the deterministic
+rules, so it goes back to sleep. Random rules break that ("nothing happened" can just be luck), so the
+step marks dirt that grass could spread onto (*primed* dirt, a flag in the cell's spare level bits), and
+the write-back, which scans every cell anyway, keeps chunks with primed dirt or unripe wheat awake.
+Priming doesn't count as a change, so it never triggers a remesh. With nothing changing, no tick runs.
+The HUD shows the batch size, whether the plant rules ran, and how many chunks are still growing.
 
 ## Block update rules
 
@@ -82,6 +95,18 @@ All cells in the region update in parallel from the previous state:
 - Fluid resting on solid ground or on a source spreads sideways at `level − decay`
   (water decays by 1, lava by 2, so lava spreads less far).
 - Lava with water beside or above it turns to stone; a cell that both fluids would flow into becomes stone.
+- **Grass** spreads like Minecraft's: onto dirt with air above it, from living grass one block to the side
+  and from one below to three above (a 5×3×3 max-pool), with a chance per tick. Grass under a solid
+  block or a fluid source dies back to dirt.
+- **Wheat** grows through stages 0–7 with a chance per tick, faster with water beside it or its soil
+  (Minecraft hydrates from 4 blocks away; here it's 1, so the one-cell ghost border still suffices).
+  It pops off without dirt or grass under it, and flowing fluid washes it away.
+- World generation scatters a few grass seeds and small patches of wild wheat; both are also in the hotbar.
+
+The random plant rules get their numbers from a hash of each cell's coordinates and per-tick seeds,
+computed on the GPU (`tf.randomUniform` would generate them in JavaScript). The step takes the random
+numbers as an input, so tests feed the TF.js step and the plain-JS reference the same ones and compare
+cell for cell.
 
 ## TF.js performance notes
 

@@ -1,5 +1,5 @@
 import {
-  ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, GHOST_RADIUS, blockIndex, cellType, chunkKey,
+  ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, GHOST_RADIUS, blockIndex, cellType, chunkKey, isPlant,
 } from '../constants';
 import { Chunk } from './chunk';
 import type { ChunkCoord } from '../tf/worldgen';
@@ -11,6 +11,11 @@ export const enum Border {
   East = 2, // x = CHUNK_SIZE - 1
   North = 4, // z = 0
   South = 8, // z = CHUNK_SIZE - 1
+  // Corner cells: grass reaches diagonally, so these also concern the diagonal neighbour.
+  NorthWest = 16,
+  NorthEast = 32,
+  SouthWest = 64,
+  SouthEast = 128,
 }
 
 export interface ChunkWindow {
@@ -104,6 +109,7 @@ export class World {
     chunk.state = this.distance(coord.cx, coord.cz) <= this.activeRadius ? 'active' : 'ghost';
     this.chunks.set(key, chunk);
     // Fresh terrain may not be settled, and its neighbours now have new border data.
+    chunk.plants = data.some(isPlant);
     this.awake.add(key);
     for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) this.neighbourChanged(coord.cx + dx, coord.cz + dz);
   }
@@ -150,6 +156,7 @@ export class World {
     if (!chunk) return;
     const lx = x - cx * CHUNK_SIZE, lz = z - cz * CHUNK_SIZE;
     chunk.data[blockIndex(lx, y, lz)] = value;
+    if (isPlant(value)) chunk.plants = true;
     this.markChanged(chunk, borderOf(lx, lz));
   }
 
@@ -166,12 +173,17 @@ export class World {
     if (borders & Border.East) this.neighbourChanged(chunk.cx + 1, chunk.cz);
     if (borders & Border.North) this.neighbourChanged(chunk.cx, chunk.cz - 1);
     if (borders & Border.South) this.neighbourChanged(chunk.cx, chunk.cz + 1);
+    // Diagonal neighbours share no faces (no remesh), but grass can spread into them.
+    if (borders & Border.NorthWest) this.neighbourChanged(chunk.cx - 1, chunk.cz - 1, false);
+    if (borders & Border.NorthEast) this.neighbourChanged(chunk.cx + 1, chunk.cz - 1, false);
+    if (borders & Border.SouthWest) this.neighbourChanged(chunk.cx - 1, chunk.cz + 1, false);
+    if (borders & Border.SouthEast) this.neighbourChanged(chunk.cx + 1, chunk.cz + 1, false);
   }
 
-  private neighbourChanged(cx: number, cz: number): void {
+  private neighbourChanged(cx: number, cz: number, remesh = true): void {
     const c = this.getChunk(cx, cz);
     if (!c) return;
-    c.version++;
+    if (remesh) c.version++;
     this.awake.add(c.key);
   }
 
@@ -212,8 +224,10 @@ export class World {
   }
 }
 
-/** Which chunk borders the local column (lx, lz) lies on. */
+/** Which chunk borders (and corners) the local column (lx, lz) lies on. */
 export function borderOf(lx: number, lz: number): number {
-  return (lx === 0 ? Border.West : 0) | (lx === CHUNK_SIZE - 1 ? Border.East : 0)
-    | (lz === 0 ? Border.North : 0) | (lz === CHUNK_SIZE - 1 ? Border.South : 0);
+  const w = lx === 0, e = lx === CHUNK_SIZE - 1, n = lz === 0, s = lz === CHUNK_SIZE - 1;
+  return (w ? Border.West : 0) | (e ? Border.East : 0) | (n ? Border.North : 0) | (s ? Border.South : 0)
+    | (n && w ? Border.NorthWest : 0) | (n && e ? Border.NorthEast : 0)
+    | (s && w ? Border.SouthWest : 0) | (s && e ? Border.SouthEast : 0);
 }
