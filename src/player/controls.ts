@@ -8,15 +8,19 @@ export class Controls {
   speed = 12;
   locked = false;
   private keys = new Set<string>();
+  /** Called when the browser refuses pointer lock (e.g. clicking again too soon after Esc). */
+  onLockError?: (message: string) => void;
   /** Mouse buttons pressed since the last poll. */
   private clicks: number[] = [];
   private keyPresses: string[] = [];
 
-  constructor(canvas: HTMLCanvasElement, start: [number, number, number]) {
+  constructor(private readonly canvas: HTMLCanvasElement, start: [number, number, number]) {
     this.position = start;
-    canvas.addEventListener('click', () => {
-      if (!this.locked) canvas.requestPointerLock();
+    // Any click starts play: the start screen overlays the canvas, so listen on the document.
+    document.addEventListener('click', () => {
+      if (!this.locked) this.requestLock();
     });
+    document.addEventListener('pointerlockerror', () => this.onLockError?.('the browser refused.'));
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
@@ -37,6 +41,16 @@ export class Controls {
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+  }
+
+  requestLock(): void {
+    try {
+      // A promise in current browsers (rejects e.g. within ~1s of leaving with Esc), undefined in older ones.
+      const pending = this.canvas.requestPointerLock() as Promise<void> | undefined;
+      pending?.catch((e: unknown) => this.onLockError?.(e instanceof Error ? e.message : String(e)));
+    } catch (e) {
+      this.onLockError?.(e instanceof Error ? e.message : String(e));
+    }
   }
 
   takeClicks(): number[] {

@@ -1,7 +1,7 @@
 import * as tf from '@tensorflow/tfjs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, blockIndex, cellType } from '../src/constants';
-import { generateChunks } from '../src/tf/worldgen';
+import { GEN_BATCH, generateChunks, type ChunkCoord } from '../src/tf/worldgen';
 
 beforeAll(async () => {
   await tf.setBackend('cpu');
@@ -9,9 +9,10 @@ beforeAll(async () => {
 
 describe('generateChunks', () => {
   it('produces all four materials across a patch of chunks', async () => {
-    const coords = [];
+    const coords: ChunkCoord[] = [];
     for (let cz = -3; cz <= 3; cz++) for (let cx = -3; cx <= 3; cx++) coords.push({ cx, cz });
-    const chunks = await generateChunks(coords);
+    const chunks: Uint8Array[] = [];
+    for (let i = 0; i < coords.length; i += GEN_BATCH) chunks.push(...await generateChunks(coords.slice(i, i + GEN_BATCH)));
     expect(chunks).toHaveLength(coords.length);
     const counts = new Array(5).fill(0);
     for (const c of chunks) {
@@ -37,5 +38,22 @@ describe('generateChunks', () => {
     for (let z = 0; z < CHUNK_SIZE; z++) {
       expect(Math.abs(surface(a, CHUNK_SIZE - 1, z) - surface(b, 0, z))).toBeLessThanOrEqual(3);
     }
+  });
+});
+
+describe('GPU-friendliness', () => {
+  // tf.where with a scalar, or broadcastTo, runs TF.js's Tile kernel, which expands small
+  // tensors on the CPU (main thread) even on GPU backends. Keep it out of the hot paths.
+  it('worldgen and block updates never run the Tile kernel', async () => {
+    const { blockUpdateStep } = await import('../src/tf/blockUpdate');
+    const { generateChunksTensor } = await import('../src/tf/worldgen');
+    const gen = await tf.profile(() => generateChunksTensor([{ cx: 0, cz: 0 }, { cx: 1, cz: 0 }]));
+    expect(gen.kernelNames).not.toContain('Tile');
+    (gen.result as tf.Tensor).dispose();
+    const cells = tf.zeros([8, 32, 32], 'int32') as tf.Tensor3D;
+    const step = await tf.profile(() => blockUpdateStep(cells));
+    expect(step.kernelNames).not.toContain('Tile');
+    (step.result as tf.Tensor).dispose();
+    cells.dispose();
   });
 });

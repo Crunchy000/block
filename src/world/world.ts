@@ -4,6 +4,15 @@ import {
 import { Chunk } from './chunk';
 import type { ChunkCoord } from '../tf/worldgen';
 
+/** Bit flags for which chunk borders a change touched. */
+export const enum Border {
+  None = 0,
+  West = 1, // x = 0
+  East = 2, // x = CHUNK_SIZE - 1
+  North = 4, // z = 0
+  South = 8, // z = CHUNK_SIZE - 1
+}
+
 export interface ChunkWindow {
   /** Chunk the window is centred on. */
   cx: number;
@@ -20,6 +29,12 @@ export class World {
   locked = false;
   private pendingEdits: Array<[number, number, number, number]> = [];
   private pendingGen = new Set<string>();
+  /**
+   * Chunks whose cells may change on the next block-update tick. A chunk that
+   * didn't change, with neighbours that didn't change, is a fixed point of the
+   * update rules, so it sleeps until an edit or a neighbour wakes it.
+   */
+  private awake = new Set<string>();
 
   constructor(readonly activeRadius = ACTIVE_RADIUS, readonly ghostRadius = GHOST_RADIUS) {
     this.window = { cx: 0, cz: 0, activeRadius, ghostRadius };
@@ -46,6 +61,8 @@ export class World {
         chunk.state = state;
         // Becoming active needs a mesh; becoming ghost drops it (renderer checks state).
         chunk.meshedVersion = -1;
+        // A ghost was frozen; once active it may have updates to catch up on.
+        if (state === 'active') this.awake.add(chunk.key);
       }
     }
   }
@@ -86,7 +103,9 @@ export class World {
     const chunk = new Chunk(coord.cx, coord.cz, data);
     chunk.state = this.distance(coord.cx, coord.cz) <= this.activeRadius ? 'active' : 'ghost';
     this.chunks.set(key, chunk);
-    this.touchNeighbours(coord.cx, coord.cz);
+    // Fresh terrain may not be settled, and its neighbours now have new border data.
+    this.awake.add(key);
+    for (const [dx, dz] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) this.neighbourChanged(coord.cx + dx, coord.cz + dz);
   }
 
   /** True once every chunk in the active area and ghost halo is loaded. */
@@ -95,6 +114,15 @@ export class World {
     for (let dz = -r; dz <= r; dz++)
       for (let dx = -r; dx <= r; dx++) if (!this.chunks.has(chunkKey(cx + dx, cz + dz))) return false;
     return true;
+  }
+
+  /** How many chunks of the active area + ghost halo are loaded. */
+  haloProgress(): { loaded: number; total: number } {
+    const { cx, cz, ghostRadius: r } = this.window;
+    let loaded = 0;
+    for (let dz = -r; dz <= r; dz++)
+      for (let dx = -r; dx <= r; dx++) if (this.chunks.has(chunkKey(cx + dx, cz + dz))) loaded++;
+    return { loaded, total: (2 * r + 1) ** 2 };
   }
 
   getCell(x: number, y: number, z: number): number {
@@ -122,31 +150,57 @@ export class World {
     if (!chunk) return;
     const lx = x - cx * CHUNK_SIZE, lz = z - cz * CHUNK_SIZE;
     chunk.data[blockIndex(lx, y, lz)] = value;
-    chunk.modified = true;
+    this.markChanged(chunk, borderOf(lx, lz));
+  }
+
+  /**
+   * Record that cells in `chunk` changed: it remeshes and wakes for block updates.
+   * Neighbours across the touched borders do too (their faces and fluid flow
+   * depend on the cells next to them).
+   */
+  markChanged(chunk: Chunk, borders: number): void {
     chunk.version++;
-    // Faces on the chunk border belong to the neighbour's mesh too.
-    if (lx === 0) this.touch(cx - 1, cz);
-    if (lx === CHUNK_SIZE - 1) this.touch(cx + 1, cz);
-    if (lz === 0) this.touch(cx, cz - 1);
-    if (lz === CHUNK_SIZE - 1) this.touch(cx, cz + 1);
+    chunk.modified = true;
+    this.awake.add(chunk.key);
+    if (borders & Border.West) this.neighbourChanged(chunk.cx - 1, chunk.cz);
+    if (borders & Border.East) this.neighbourChanged(chunk.cx + 1, chunk.cz);
+    if (borders & Border.North) this.neighbourChanged(chunk.cx, chunk.cz - 1);
+    if (borders & Border.South) this.neighbourChanged(chunk.cx, chunk.cz + 1);
+  }
+
+  private neighbourChanged(cx: number, cz: number): void {
+    const c = this.getChunk(cx, cz);
+    if (!c) return;
+    c.version++;
+    this.awake.add(c.key);
+  }
+
+  /** Active chunks that need a block-update tick. Clears the awake set. */
+  takeAwake(): Chunk[] {
+    const out: Chunk[] = [];
+    for (const key of this.awake) {
+      const c = this.chunks.get(key);
+      if (c?.state === 'active') out.push(c);
+    }
+    this.awake.clear();
+    return out;
+  }
+
+  /** Put chunks back in the awake set (e.g. after a failed tick). */
+  wake(chunks: Chunk[]): void {
+    for (const c of chunks) this.awake.add(c.key);
+  }
+
+  awakeCount(): number {
+    let n = 0;
+    for (const key of this.awake) if (this.chunks.get(key)?.state === 'active') n++;
+    return n;
   }
 
   flushPendingEdits(): void {
     const edits = this.pendingEdits;
     this.pendingEdits = [];
     for (const [x, y, z, v] of edits) this.setCell(x, y, z, v);
-  }
-
-  touch(cx: number, cz: number): void {
-    const c = this.getChunk(cx, cz);
-    if (c) c.version++;
-  }
-
-  touchNeighbours(cx: number, cz: number): void {
-    this.touch(cx - 1, cz);
-    this.touch(cx + 1, cz);
-    this.touch(cx, cz - 1);
-    this.touch(cx, cz + 1);
   }
 
   activeChunks(): Chunk[] {
@@ -156,4 +210,10 @@ export class World {
   ghostChunks(): Chunk[] {
     return [...this.chunks.values()].filter((c) => c.state === 'ghost' && this.distance(c.cx, c.cz) <= this.ghostRadius);
   }
+}
+
+/** Which chunk borders the local column (lx, lz) lies on. */
+export function borderOf(lx: number, lz: number): number {
+  return (lx === 0 ? Border.West : 0) | (lx === CHUNK_SIZE - 1 ? Border.East : 0)
+    | (lz === 0 ? Border.North : 0) | (lz === CHUNK_SIZE - 1 ? Border.South : 0);
 }

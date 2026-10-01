@@ -2,6 +2,7 @@ import * as tf from '@tensorflow/tfjs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { Block, SOURCE_LEVEL, cell, cellLevel, cellType } from '../src/constants';
 import { blockUpdateStep } from '../src/tf/blockUpdate';
+import { blockUpdateReference } from '../src/tf/blockUpdateReference';
 
 const H = 6, D = 9, W = 9;
 const idx = (x: number, y: number, z: number) => (y * D + z) * W + x;
@@ -13,8 +14,8 @@ function floorRegion(): Int32Array {
   return a;
 }
 
-function run(a: Int32Array, steps: number): Int32Array {
-  let t = tf.tensor3d(a, [H, D, W], 'int32');
+function run(a: Int32Array, steps: number, shape: [number, number, number] = [H, D, W]): Int32Array {
+  let t = tf.tensor3d(a, shape, 'int32');
   for (let i = 0; i < steps; i++) {
     const n = blockUpdateStep(t);
     t.dispose();
@@ -25,11 +26,53 @@ function run(a: Int32Array, steps: number): Int32Array {
   return Int32Array.from(out);
 }
 
+/** Small deterministic PRNG (mulberry32). */
+function rng(seed: number) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function randomRegion(n: number, rand: () => number): Int32Array {
+  const a = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = rand(), level = 1 + Math.floor(rand() * SOURCE_LEVEL);
+    a[i] = r < 0.5 ? cell(Block.Air) : r < 0.65 ? cell(Block.Stone) : r < 0.75 ? cell(Block.Dirt)
+      : r < 0.88 ? cell(Block.Water, level) : cell(Block.Lava, level);
+  }
+  return a;
+}
+
 beforeAll(async () => {
   await tf.setBackend('cpu');
 });
 
 describe('blockUpdateStep', () => {
+  it('matches the cell-by-cell reference on random regions', () => {
+    const rand = rng(42);
+    const shape: [number, number, number] = [7, 10, 13]; // non-cubic, so axis mix-ups show
+    const n = shape[0] * shape[1] * shape[2];
+    for (let trial = 0; trial < 5; trial++) {
+      let state = randomRegion(n, rand);
+      for (let step = 0; step < 4; step++) {
+        const expected = blockUpdateReference(state, ...shape);
+        expect(run(state, 1, shape)).toEqual(expected);
+        state = expected;
+      }
+    }
+  });
+
+  it('leaves no tensors behind', () => {
+    const before = tf.memory().numTensors;
+    const t = tf.tensor3d(floorRegion(), [H, D, W], 'int32');
+    blockUpdateStep(t).dispose();
+    t.dispose();
+    expect(tf.memory().numTensors).toBe(before);
+  });
+
   it('water falls straight down', () => {
     const a = floorRegion();
     a[idx(4, 4, 4)] = cell(Block.Water, SOURCE_LEVEL);

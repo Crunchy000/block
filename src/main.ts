@@ -5,34 +5,55 @@ import { raycast, type RayHit } from './player/raycast';
 import { fpsView, multiply, perspective } from './render/math';
 import { meshChunk } from './render/mesher';
 import { Renderer } from './render/renderer';
-import { fallbackBackend, initTensorflow } from './tf/backend';
+import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
 import { Simulation } from './tf/simulation';
-import { generateChunks } from './tf/worldgen';
+import { GEN_BATCH, generateChunks } from './tf/worldgen';
 import { World } from './world/world';
 
 const TICK_MS = 200;          // block-update rate (5 ticks / second)
-const GEN_BATCH = 16;         // chunks generated per TF batch
 const MESH_BUDGET = 4;        // chunks meshed per frame
 
 const $ = (id: string) => document.getElementById(id)!;
 
 async function main(): Promise<void> {
   const canvas = $('gpu') as HTMLCanvasElement;
-  const status = $('status'), overlay = $('overlay'), hud = $('hud');
+  const overlay = $('overlay'), hud = $('hud'), errorBox = $('error');
+  let statusText = '';
+  const setStatus = (text: string) => {
+    if (text !== statusText) $('status').textContent = statusText = text;
+  };
+  let lastError = '';
+  const showError = (text: string) => {
+    lastError = text;
+    errorBox.textContent = text;
+  };
 
-  status.textContent = 'Starting WebGPU…';
+  setStatus('Starting WebGPU…');
   const params = new URLSearchParams(location.search);
   const renderer = await Renderer.create(canvas, { offscreen: params.has('offscreen') });
-  status.textContent = 'Starting TensorFlow.js…';
+  setStatus('Starting TensorFlow.js…');
   let tfBackend = await initTensorflow(renderer.device, renderer.adapterInfo);
+  setStatus(`Compiling GPU kernels (${tfBackend})…`);
+  try {
+    await warmUpKernels();
+  } catch (e) {
+    console.warn('kernel warm-up failed; kernels will compile on first use', e);
+  }
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
   let switching = false;
   const onTfError = (what: string) => (e: unknown) => {
     console.error(`${what} failed on tfjs backend ${tfBackend}`, e);
+    showError(`${what} failed on ${tfBackend}: ${e instanceof Error ? e.message : String(e)}`);
     if (switching) return;
     switching = true;
-    fallbackBackend().then((name) => { tfBackend = name; }).finally(() => { switching = false; });
+    fallbackBackend()
+      .then(async (name) => {
+        if (name !== tfBackend) showError(`${lastError} (switched TensorFlow.js to ${name})`);
+        tfBackend = name;
+        await warmUpKernels().catch(() => {});
+      })
+      .finally(() => { switching = false; });
   };
 
   const radius = params.has('radius') ? Math.max(1, Number(params.get('radius'))) : undefined;
@@ -43,11 +64,17 @@ async function main(): Promise<void> {
   const controls = new Controls(canvas, pos);
   if (params.has('yaw')) controls.yaw = Number(params.get('yaw'));
   if (params.has('pitch')) controls.pitch = Number(params.get('pitch'));
-  status.textContent = 'Click to play';
-  document.addEventListener('pointerlockchange', () => overlay.classList.toggle('hidden', controls.locked));
+  controls.onLockError = (message) => showError(`Couldn't capture the mouse: ${message} Click again to retry.`);
+  document.addEventListener('pointerlockchange', () => {
+    overlay.classList.toggle('hidden', controls.locked);
+    if (controls.locked && lastError.startsWith("Couldn't capture")) showError('');
+  });
 
   // Console / automation handle, e.g. block.world.setCell(x, y, z, value).
   Object.assign(window, { block: { world, sim, controls, renderer, tf } });
+
+  const info = renderer.adapterInfo;
+  const gpuName = [info.vendor, info.architecture || info.device || info.description].filter(Boolean).join(' ') || 'unknown';
 
   let generating = false;
   let selected: Block = Block.Dirt;
@@ -58,7 +85,7 @@ async function main(): Promise<void> {
   let fps = 0;
 
   const pumpGeneration = () => {
-    if (generating) return;
+    if (generating || switching) return;
     const batch = world.missingChunks(GEN_BATCH);
     if (batch.length === 0) return;
     generating = true;
@@ -105,7 +132,8 @@ async function main(): Promise<void> {
     }
     for (const button of controls.takeClicks()) {
       if (!hit) continue;
-      if (button === 0) world.setCell(...hit.block, cell(Block.Air));
+      // y = 0 is bedrock: it holds up fluids at the bottom of the world.
+      if (button === 0 && hit.block[1] > 0) world.setCell(...hit.block, cell(Block.Air));
       if (button === 2) {
         const level = selected === Block.Water || selected === Block.Lava ? SOURCE_LEVEL : 0;
         world.setCell(...hit.before, cell(selected, level));
@@ -136,7 +164,19 @@ async function main(): Promise<void> {
     return new Float32Array(out);
   };
 
+  const blockUpdateStatus = () => {
+    const [rx, rz] = sim.lastRegion;
+    if (paused) return 'paused';
+    if (!world.haloReady()) return 'waiting for terrain';
+    if (world.locked) return `running tick ${sim.ticks + 1} over ${rx}x${rz} chunks…`;
+    if (sim.ticks === 0) return 'starting…';
+    if (sim.asleep) return `asleep after tick ${sim.ticks} (nothing changing)`;
+    return `tick ${sim.ticks}: ${rx}x${rz} chunks, ${sim.lastTickMs.toFixed(0)} ms ` +
+      `(main thread ${sim.lastCpuMs.toFixed(0)} ms), ${sim.lastChangedChunks} changed`;
+  };
+
   const frame = (now: number) => {
+    requestAnimationFrame(frame);
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     fps = fps * 0.95 + (dt > 0 ? 1 / dt : 0) * 0.05;
@@ -150,11 +190,14 @@ async function main(): Promise<void> {
     const hit = raycast((x, y, z) => world.getBlock(x, y, z), eye, controls.look, 8);
     handleInput(hit);
 
-    if (!paused && now - lastTick >= TICK_MS && !world.locked) {
+    if (!paused && !switching && now - lastTick >= TICK_MS && !world.locked) {
       lastTick = now;
       sim.tick().catch(onTfError('block update'));
     }
     pumpMeshing();
+
+    const { loaded, total } = world.haloProgress();
+    setStatus(loaded < total ? `Generating world… ${loaded} / ${total} chunks` : 'Click anywhere to play');
 
     const fogDistance = world.activeRadius * CHUNK_SIZE + 8;
     const proj = perspective((70 * Math.PI) / 180, renderer.aspect, 0.1, fogDistance * 1.5);
@@ -162,14 +205,13 @@ async function main(): Promise<void> {
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit));
 
     hud.textContent = [
-      `fps ${fps.toFixed(0)}   tf backend: ${tfBackend}`,
+      `fps ${fps.toFixed(0)}   tf backend: ${tfBackend}   gpu: ${gpuName}`,
       `pos ${px.toFixed(1)} ${py.toFixed(1)} ${pz.toFixed(1)}   chunk ${world.window.cx},${world.window.cz}`,
-      `chunks: ${world.activeChunks().length} active, ${world.ghostChunks().length} ghost (halo)`,
-      `block updates: tick ${sim.ticks}  ${sim.lastTickMs.toFixed(0)} ms  ${sim.lastChangedChunks} chunks changed${paused ? '  [PAUSED]' : ''}`,
-      `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}`,
+      `chunks: ${world.activeChunks().length} active (${world.awakeCount()} awake), ${world.ghostChunks().length} ghost (halo)`,
+      `block updates: ${blockUpdateStatus()}`,
+      `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
+      ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
-
-    requestAnimationFrame(frame);
   };
   requestAnimationFrame(frame);
 }

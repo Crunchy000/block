@@ -70,4 +70,47 @@ describe('active area + ghost halo', () => {
     await pending;
     expect(world.getBlock(3, 6, 3)).toBe(Block.Dirt);
   });
+
+  it('sleeps once nothing is changing, so idle ticks cost nothing', async () => {
+    const world = new World(1, 2);
+    world.recenter(8, 8);
+    fill(world);
+    const sim = new Simulation(world);
+    expect(await sim.tick()).toBe(true); // freshly loaded chunks are awake
+    expect(sim.lastRegion).toEqual([5, 5]); // 3x3 active + ghost border
+    expect(sim.lastChangedChunks).toBe(0);
+    expect(await sim.tick()).toBe(false);
+    expect(sim.asleep).toBe(true);
+  });
+
+  it('an edit only simulates the chunk around it, then sleeps again once settled', async () => {
+    const world = new World(1, 2);
+    world.recenter(8, 8);
+    fill(world);
+    const sim = new Simulation(world);
+    await sim.tick();
+    world.setCell(CHUNK_SIZE + 8, 4, 8, cell(Block.Water, SOURCE_LEVEL)); // middle of chunk (1, 0)
+    expect(await sim.tick()).toBe(true);
+    expect(sim.lastRegion).toEqual([3, 3]);
+    let ticks = 1;
+    while (await sim.tick()) ticks++;
+    expect(ticks).toBeLessThan(12);
+    expect(sim.asleep).toBe(true);
+    expect(cellType(world.getCell(CHUNK_SIZE + 2, 4, 8))).toBe(Block.Water); // spread 6 blocks
+  });
+
+  it('flow across a chunk border wakes the neighbouring chunk', async () => {
+    const world = new World(1, 2);
+    world.recenter(8, 8);
+    fill(world);
+    const sim = new Simulation(world);
+    await sim.tick();
+    world.setCell(CHUNK_SIZE - 2, 4, 8, cell(Block.Water, SOURCE_LEVEL)); // near the east edge of chunk (0, 0)
+    await sim.tick();
+    expect(sim.lastRegion).toEqual([3, 3]);
+    await sim.tick(); // water reached x = 15, the border with chunk (1, 0)
+    await sim.tick();
+    expect(sim.lastRegion).toEqual([4, 3]);
+    expect(cellType(world.getCell(CHUNK_SIZE, 4, 8))).toBe(Block.Water);
+  });
 });
