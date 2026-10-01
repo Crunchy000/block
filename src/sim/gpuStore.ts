@@ -3,9 +3,9 @@ import type { WebGPUBackend } from '@tensorflow/tfjs-backend-webgpu';
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, type PlantRates } from '../constants';
 import type { RayHit } from '../player/raycast';
 import { GpuMesher } from '../render/gpuMesher';
-import type { MeshPool } from '../render/meshPool';
+import { MeshPool } from '../render/meshPool';
 import { RULES_WGSL } from './rules';
-import { AROUND, SELF, TickFlag, type CellStore, type MeshJob, type StagedChunks } from './store';
+import { AROUND, SELF, TickFlag, type CellStore, type MeshJob, type MeshTarget, type StagedChunks } from './store';
 
 const CHUNK_BYTES = CHUNK_VOLUME * 4;
 const WORKGROUP = 64;
@@ -203,7 +203,8 @@ class Readbacks {
  * halo (to be restored when it comes back).
  */
 export class GpuStore implements CellStore {
-  readonly meshBudget = Infinity;
+  /** A few chunks per frame: meshing everything at once is one long GPU job, too much for some phones. */
+  readonly meshBudget = 8;
   /** Every slot's cells (i32), CHUNK_VOLUME per slot in chunk layout. */
   readonly cells: GPUBuffer;
   private readonly slotInfo: GPUBuffer;
@@ -368,8 +369,10 @@ export class GpuStore implements CellStore {
     return r[0] ? { block: [r[1], r[2], r[3]], before: [r[4], r[5], r[6]] } : null;
   }
 
-  mesh(jobs: MeshJob[], pool: MeshPool | undefined): void {
-    if (pool) this.mesher.mesh(this.cells, jobs, pool);
+  mesh(jobs: MeshJob[], target: MeshTarget | undefined): void {
+    if (!target) return;
+    if (!(target instanceof MeshPool)) throw new Error('the GPU world meshes into GPU mesh slots (a MeshPool)');
+    this.mesher.mesh(this.cells, jobs, target);
   }
 
   destroy(): void {

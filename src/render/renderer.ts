@@ -1,7 +1,8 @@
 import type { ChunkDraw } from '../world/world';
 import { requestGpu } from './gpu';
+import { ClassicMeshes, VERTEX_FLOATS } from './classicMeshes';
 import type { MeshPool } from './meshPool';
-import { blockShader, lineShader } from './shaders';
+import { blockShader, classicBlockShader, lineShader } from './shaders';
 
 export const SKY: [number, number, number] = [0.55, 0.75, 0.95];
 
@@ -12,6 +13,12 @@ export interface RendererOptions {
    * environments where canvas presentation is unavailable (screenshots, CI).
    */
   offscreen?: boolean;
+  /**
+   * Safe mode (?safe): draw chunk meshes built on the CPU with plain vertex and index buffers,
+   * as the renderer did before meshing moved to the GPU. No storage buffers in the vertex
+   * stage, no draw sizes read from GPU memory.
+   */
+  safe?: boolean;
 }
 
 export class Renderer {
@@ -27,7 +34,7 @@ export class Renderer {
   private uniformBuffer!: GPUBuffer;
   private layout!: GPUBindGroupLayout;
   private bindGroup?: GPUBindGroup;
-  private bindGroupPool?: MeshPool;
+  private bindGroupPool?: MeshPool | ClassicMeshes;
   private opaquePipeline!: GPURenderPipeline;
   private waterPipeline!: GPURenderPipeline;
   private linePipeline!: GPURenderPipeline;
@@ -68,21 +75,35 @@ export class Renderer {
     }
 
     this.uniformBuffer = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    // Uniforms, then the meshes' face records and chunk origins (read by the vertex shader).
+    const safe = this.options.safe === true;
+    // Uniforms, then (except in safe mode) the meshes' face records and chunk origins, read by the vertex shader.
+    const uniformEntry: GPUBindGroupLayoutEntry = { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} };
     this.layout = device.createBindGroupLayout({
-      entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
+      entries: safe ? [uniformEntry] : [
+        uniformEntry,
         { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
         { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
       ],
     });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
 
-    const blockModule = device.createShaderModule({ label: 'blocks', code: blockShader });
+    const blockModule = device.createShaderModule({ label: safe ? 'blocks (safe mode)' : 'blocks', code: safe ? classicBlockShader : blockShader });
+    const classicVertex = (): GPUVertexState => ({
+      module: blockModule,
+      entryPoint: 'vs',
+      buffers: [{
+        arrayStride: VERTEX_FLOATS * 4,
+        attributes: [
+          { shaderLocation: 0, offset: 0, format: 'float32x3' },
+          { shaderLocation: 1, offset: 12, format: 'float32x3' },
+          { shaderLocation: 2, offset: 24, format: 'float32' },
+        ],
+      }],
+    });
     this.opaquePipeline = device.createRenderPipeline({
       label: 'blocks (opaque)',
       layout: pipelineLayout,
-      vertex: { module: blockModule, entryPoint: 'vsOpaque' },
+      vertex: safe ? classicVertex() : { module: blockModule, entryPoint: 'vsOpaque' },
       fragment: { module: blockModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
       depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
@@ -90,7 +111,7 @@ export class Renderer {
     this.waterPipeline = device.createRenderPipeline({
       label: 'blocks (water)',
       layout: pipelineLayout,
-      vertex: { module: blockModule, entryPoint: 'vsWater' },
+      vertex: safe ? classicVertex() : { module: blockModule, entryPoint: 'vsWater' },
       fragment: {
         module: blockModule,
         entryPoint: 'fs',
@@ -126,12 +147,13 @@ export class Renderer {
     });
   }
 
-  private groupFor(pool: MeshPool): GPUBindGroup {
-    if (this.bindGroup && this.bindGroupPool === pool) return this.bindGroup;
-    this.bindGroupPool = pool;
+  private groupFor(meshes: MeshPool | ClassicMeshes): GPUBindGroup {
+    if (this.bindGroup && this.bindGroupPool === meshes) return this.bindGroup;
+    this.bindGroupPool = meshes;
+    const buffers = meshes instanceof ClassicMeshes ? [this.uniformBuffer] : [this.uniformBuffer, meshes.faces, meshes.origins];
     return this.bindGroup = this.device.createBindGroup({
       layout: this.layout,
-      entries: [this.uniformBuffer, pool.faces, pool.origins].map((buffer, binding) => ({ binding, resource: { buffer } })),
+      entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
   }
 
@@ -186,7 +208,7 @@ export class Renderer {
    */
   render(
     viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>,
-    pool: MeshPool, draws: ChunkDraw[],
+    pool: MeshPool | ClassicMeshes, draws: ChunkDraw[],
   ): void {
     // A canvas throttles us to what the GPU can present; offscreen nothing does, and on a
     // slow GPU frames would pile up in the queue ahead of the block-update work. Skip
@@ -218,8 +240,20 @@ export class Renderer {
     });
     pass.setBindGroup(0, this.groupFor(pool));
 
+    // Safe mode: ordinary indexed draws of CPU-built meshes; otherwise indirect draws whose sizes the GPU mesher wrote.
+    const drawMesh = (d: ChunkDraw, water: boolean) => {
+      if (pool instanceof ClassicMeshes) {
+        const m = water ? pool.get(d.meshSlot)?.water : pool.get(d.meshSlot)?.opaque;
+        if (!m) return;
+        pass.setVertexBuffer(0, m.vertex);
+        pass.setIndexBuffer(m.index, 'uint32');
+        pass.drawIndexed(m.count);
+      } else {
+        pass.drawIndirect(pool.draws, pool.drawOffset(d.meshSlot) + (water ? 16 : 0));
+      }
+    };
     pass.setPipeline(this.opaquePipeline);
-    for (const d of draws) pass.drawIndirect(pool.draws, pool.drawOffset(d.meshSlot));
+    for (const d of draws) drawMesh(d, false);
 
     if (lines.length > 0) {
       pass.setPipeline(this.linePipeline);
@@ -230,9 +264,7 @@ export class Renderer {
     // Translucent water, far chunks first.
     const d2 = (p: number[]) => (p[0] - cam[0]) ** 2 + (p[1] - cam[1]) ** 2 + (p[2] - cam[2]) ** 2;
     pass.setPipeline(this.waterPipeline);
-    for (const d of [...draws].sort((a, b) => d2(b.center) - d2(a.center))) {
-      pass.drawIndirect(pool.draws, pool.drawOffset(d.meshSlot) + 16);
-    }
+    for (const d of [...draws].sort((a, b) => d2(b.center) - d2(a.center))) drawMesh(d, true);
 
     pass.end();
     const afterSubmit = this.present(encoder);

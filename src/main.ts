@@ -7,6 +7,8 @@ import { Controls } from './player/controls';
 import { TouchControls } from './player/touchControls';
 import type { RayHit } from './player/raycast';
 import { fpsView, multiply, perspective } from './render/math';
+import { ClassicMeshes } from './render/classicMeshes';
+import { FACE_CAPACITY } from './render/mesher';
 import { MeshPool } from './render/meshPool';
 import { Renderer } from './render/renderer';
 import { checkGpuStore } from './sim/check';
@@ -23,6 +25,51 @@ const TICK_MS = 200;          // block-update rate (5 ticks / second)
 const PICK_DISTANCE = 8;      // blocks
 
 const $ = (id: string) => document.getElementById(id)!;
+
+/** View distances offered on the start screen (chunks from the player's chunk). */
+const VIEW_DISTANCES = [3, 5, 8, 12];
+const VIEW_KEY = 'block.viewDistance';
+
+/**
+ * The furthest view distance this GPU can hold: every drawn chunk has a mesh slot of
+ * FACE_CAPACITY faces in one GPU buffer. Safe mode builds meshes on the CPU, which is slow
+ * for big areas.
+ */
+function maxViewDistance(device: GPUDevice, safe: boolean): number {
+  if (safe) return 8;
+  const bytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
+  const slots = Math.floor(bytes / (FACE_CAPACITY * 4));
+  return Math.max(1, Math.floor((Math.sqrt(slots) - 1) / 2));
+}
+
+/** ?radius=N, else the one picked on the start screen, else 3 on phones and 8 elsewhere; within what the GPU holds. */
+function viewDistance(params: URLSearchParams, device: GPUDevice, safe: boolean): number {
+  let stored: string | null = null;
+  try { stored = localStorage.getItem(VIEW_KEY); } catch { /* storage blocked */ }
+  const asked = Number(params.get('radius') ?? stored ?? (matchMedia('(pointer: coarse)').matches ? ACTIVE_RADIUS : 8));
+  return Math.min(maxViewDistance(device, safe), Math.max(1, Math.floor(asked) || ACTIVE_RADIUS));
+}
+
+/** The view-distance picker on the start screen: choosing one remembers it and reloads. */
+function showViewDistances(current: number, max: number): void {
+  const box = $('view-distance');
+  box.replaceChildren('View distance: ');
+  for (const d of [...new Set([...VIEW_DISTANCES, current])].filter((v) => v <= max).sort((a, b) => a - b)) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = String(d);
+    b.className = d === current ? 'chosen' : '';
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      try { localStorage.setItem(VIEW_KEY, String(d)); } catch { /* storage blocked: the URL carries it */ }
+      const url = new URL(location.href);
+      url.searchParams.delete('radius');
+      if (d !== current) location.href = url.toString();
+    });
+    box.append(b, ' ');
+  }
+  box.append(`chunks${max < VIEW_DISTANCES[VIEW_DISTANCES.length - 1] ? ` (this GPU holds up to ${max})` : ''}`);
+}
 
 async function main(): Promise<void> {
   const startedAt = performance.now();
@@ -47,7 +94,11 @@ async function main(): Promise<void> {
   log.info(`Block build ${__BUILD__}`);
   setStatus('Starting WebGPU…');
   const params = new URLSearchParams(location.search);
-  const renderer = await Renderer.create(canvas, { offscreen: params.has('offscreen') });
+  // Safe mode (?safe): the world on the CPU and the previous renderer, for GPUs (some phones)
+  // that crash on the GPU world or its renderer.
+  const safe = params.has('safe');
+  if (safe) log.info('Safe mode: world on the CPU, meshes built on the CPU, plain draws');
+  const renderer = await Renderer.create(canvas, { offscreen: params.has('offscreen'), safe });
   setStatus('Starting TensorFlow.js…');
   let tfBackend = await initTensorflow(renderer.device, renderer.adapterInfo);
   log.info(`TensorFlow.js backend: ${tfBackend}`);
@@ -58,21 +109,25 @@ async function main(): Promise<void> {
     logError('Kernel warm-up failed (kernels will compile on first use)', e);
   }
   const { device } = renderer;
-  const activeRadius = params.has('radius') ? Math.max(1, Math.floor(Number(params.get('radius')))) : ACTIVE_RADIUS;
+  const activeRadius = viewDistance(params, device, safe);
   const ghostRadius = activeRadius + 1;
+  log.info(`View distance: ${activeRadius} chunks (${(2 * activeRadius + 1) ** 2} chunks drawn and simulated)`);
+  showViewDistances(activeRadius, maxViewDistance(device, safe));
   // The world lives in GPU memory, where block updates, meshing and picking run. First
   // check that this GPU computes them exactly as the reference code does; if it doesn't,
   // the world lives on the CPU with the reference code instead (slower, same game).
-  setStatus('Checking the GPU world code…');
-  const check = await checkGpuStore(device).catch((e: unknown) => ({ ok: false, summary: '', detail: log.describe(e).join('\n') }));
+  const onCpu = safe || params.has('cpu');
+  if (!onCpu) setStatus('Checking the GPU world code…');
+  const check = onCpu ? { ok: false, summary: '', detail: safe ? 'safe mode' : '?cpu' }
+    : await checkGpuStore(device).catch((e: unknown) => ({ ok: false, summary: '', detail: log.describe(e).join('\n') }));
   if (check.ok) log.info('GPU world check passed', check.summary);
-  else log.warn('GPU world check failed: the world stays on the CPU', check.detail);
+  else if (!onCpu) log.warn('GPU world check failed: the world stays on the CPU', check.detail);
   setStatus('Setting up the world…');
-  const store: CellStore = check.ok && !params.has('cpu')
+  const store: CellStore = check.ok && !onCpu
     ? await GpuStore.create(device, ringSize(ghostRadius))
     : new CpuStore(ringSize(ghostRadius));
   log.info(store instanceof GpuStore ? 'World: in GPU memory' : 'World: on the CPU');
-  const meshes = new MeshPool(device, meshSlotCount(activeRadius));
+  const meshes = safe ? new ClassicMeshes(device, meshSlotCount(activeRadius)) : new MeshPool(device, meshSlotCount(activeRadius));
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
   let switching = false;
@@ -119,8 +174,7 @@ async function main(): Promise<void> {
   // The start screen starts play: a tap gets on-screen touch controls, a mouse click captures the mouse.
   // (Safari's click events don't say which pointer made them, so remember it from pointerdown.)
   // The benchmark link sits on the start screen; following it shouldn't start the game too.
-  $('bench-link').addEventListener('click', (e) => e.stopPropagation());
-  $('log-link').addEventListener('click', (e) => e.stopPropagation());
+  for (const link of overlay.querySelectorAll('a')) link.addEventListener('click', (e) => e.stopPropagation());
   let startPointer = 'mouse';
   overlay.addEventListener('pointerdown', (e) => { startPointer = e.pointerType; });
   overlay.addEventListener('click', (e) => {
@@ -304,7 +358,7 @@ async function main(): Promise<void> {
         `${world.ghostChunks().length} ghost (halo)${saved ? `, ${saved} changed ones saved` : ''}`,
       store instanceof GpuStore
         ? `world: in GPU memory (${(store.bytes / 2 ** 20).toFixed(1)} MB); a tick reads back ${sim.lastBatch * 4} bytes of flags`
-        : `world: on the CPU (${check.ok ? '?cpu' : `the GPU failed its check: ${check.detail}`})`,
+        : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       `block updates: ${blockUpdateStatus()}`,
       `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),

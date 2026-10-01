@@ -28,7 +28,13 @@ The bottom layer (y = 0) is unbreakable bedrock.
 Every push is built and tested by `.github/workflows/pages.yml`; pushes to the default branch are
 published to GitHub Pages at `https://<owner>.github.io/<repo>/`.
 
-URL params: `?radius=N` active radius in chunks (default 3) · `pos=x,y,z` · `yaw=` / `pitch=` (radians) ·
+**View distance:** pick 3, 5, 8 or 12 chunks on the start screen (remembered; default 8, or 3 on phones), up to what
+the GPU's buffer limits hold. Every chunk in view is also simulated, but sleeping chunks cost nothing.
+
+**Safe mode** (`?safe`, linked from the start screen): the world on the CPU and the previous renderer (meshes built
+on the CPU, plain indexed draws), for GPUs that crash on the GPU world, as an Adreno 6xx phone on Android 10 did.
+
+URL params: `?radius=N` view distance in chunks · `pos=x,y,z` · `yaw=` / `pitch=` (radians) ·
 `chunks` (outlines on) · `spread=` grass spread chance per tick (default 1/16, 0 = never) ·
 `grow=` wheat growth chance per tick (default 1/40, 1/12 next to water) · `offscreen` (render to a
 texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available) ·

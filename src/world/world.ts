@@ -1,8 +1,7 @@
 import {
   ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, GHOST_RADIUS, blockIndex, chunkKey,
 } from '../constants';
-import type { MeshPool } from '../render/meshPool';
-import { AROUND, ringSize, slotOf, type CellStore } from '../sim/store';
+import { AROUND, ringSize, slotOf, type CellStore, type MeshTarget } from '../sim/store';
 import type { ChunkCoord } from '../tf/worldgen';
 import { Chunk, type ChunkState } from './chunk';
 
@@ -299,7 +298,7 @@ export class World {
    * per call. A chunk waits for its four side neighbours, so border faces cull correctly.
    * Returns how many were meshed.
    */
-  remesh(pool: MeshPool | undefined): number {
+  remesh(pool: MeshTarget | undefined): number {
     const { cx, cz } = this.window;
     const loaded = (x: number, z: number) => this.getChunk(x, z)?.loaded === true;
     const todo = this.activeChunks()

@@ -1,7 +1,7 @@
 import type * as tf from '@tensorflow/tfjs';
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, PRIMED_DIRT, type PlantRates } from '../constants';
 import type { RayHit } from '../player/raycast';
-import type { MeshPool } from '../render/meshPool';
+import type { ChunkFaces } from '../render/mesher';
 
 /**
  * Where the world's cells live, and the operations on them. The game keeps them on the
@@ -39,7 +39,7 @@ export interface CellStore {
   /** The first solid block or plant along a ray (see player/raycast.ts). */
   raycast(origin: readonly number[], dir: readonly number[], maxDist: number): Promise<RayHit | null>;
   /** Mesh chunks into their mesh slots (see render/mesher.ts for the face records). */
-  mesh(jobs: MeshJob[], pool: MeshPool | undefined): void;
+  mesh(jobs: MeshJob[], target: MeshTarget | undefined): void;
 }
 
 /** Generated chunks waiting to be written into slots. */
@@ -48,6 +48,11 @@ export interface StagedChunks {
   write(slot: number, index: number): void;
   /** Done writing. */
   release(): void;
+}
+
+/** Where meshes go: GPU mesh slots (MeshPool), or CPU-built buffers in safe mode (ClassicMeshes). */
+export interface MeshTarget {
+  upload(slot: number, cx: number, cz: number, faces: ChunkFaces): void;
 }
 
 export interface MeshJob {

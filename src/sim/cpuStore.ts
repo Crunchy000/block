@@ -2,11 +2,10 @@ import type * as tf from '@tensorflow/tfjs';
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, cellType, isGrowing, type PlantRates } from '../constants';
 import { raycast, type RayHit } from '../player/raycast';
 import { meshFaces, type ChunkFaces } from '../render/mesher';
-import type { MeshPool } from '../render/meshPool';
 import { blockUpdateReference, cellRandom } from '../tf/blockUpdateReference';
 import { borderOf } from '../world/world';
 import {
-  AROUND, SELF, TickFlag, cellNear, slotOf, unprimed, type CellStore, type MeshJob, type StagedChunks,
+  AROUND, SELF, TickFlag, cellNear, slotOf, unprimed, type CellStore, type MeshJob, type MeshTarget, type StagedChunks,
 } from './store';
 
 const P = CHUNK_SIZE + 2;
@@ -100,7 +99,7 @@ export class CpuStore implements CellStore {
     return meshFaces((x, y, z) => cellNear(this.cells, around, x, y, z));
   }
 
-  mesh(jobs: MeshJob[], pool: MeshPool | undefined): void {
+  mesh(jobs: MeshJob[], pool: MeshTarget | undefined): void {
     if (!pool) return; // nothing to draw with (Node tests)
     for (const job of jobs) pool.upload(job.meshSlot, job.cx, job.cz, this.meshChunk(job.around));
   }

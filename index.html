@@ -30,6 +30,9 @@
       .help { opacity: .8; }
       .bench-link { display: inline-block; margin-top: 16px; padding: 7px 16px; border: 1px solid rgba(255,255,255,.45); border-radius: 8px; color: #fff; text-decoration: none; font-size: 13px; }
       .bench-link:hover, .bench-link:focus-visible { background: rgba(255,255,255,.15); }
+      .view-distance { margin-top: 14px; font-size: 13px; }
+      .view-distance button { min-width: 40px; padding: 6px 10px; margin: 0 2px; border-radius: 8px; border: 1px solid rgba(255,255,255,.45); background: rgba(0,0,0,.3); color: #fff; font: inherit; cursor: pointer; }
+      .view-distance button.chosen { background: #fff; color: #000; }
       .help.touch { display: none; }
       @media (pointer: coarse) {
         .help.touch { display: block; }
@@ -97,8 +100,10 @@
         <div class="help touch">Left side: drag to move (double-tap and hold to sprint)<br />
         Right side: drag to look · ▲ ▼ fly<br />
         Break / Place act on the block under the crosshair · tap a block below to choose it</div>
+        <div id="view-distance" class="view-distance"></div>
         <a id="bench-link" class="bench-link" href="./bench.html?start">Benchmark this device: block updates per second</a>
         <a id="log-link" class="bench-link" href="./log.html">Logs from earlier visits (if the game crashed)</a>
+        <a id="safe-link" class="bench-link" href="./?safe">Safe mode (if the game crashes on this device)</a>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
