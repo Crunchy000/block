@@ -7,6 +7,7 @@ TensorFlow.js** and rendering is a hand-written **WebGPU** renderer.
 npm install
 npm run dev        # http://localhost:5173 — needs a WebGPU browser (Chrome/Edge 113+, Safari 26+, Firefox 141+)
 npm test           # TF.js logic on the CPU backend (worldgen, block updates, meshing, halo)
+npm run test:gpu   # the fused WebGPU rules kernel vs the reference, in headless Chromium (Playwright)
 npm run build
 ```
 
@@ -46,15 +47,18 @@ the GPU between steps (the ceiling without per-tick data movement), and the rate
 | `src/constants.ts` | Chunk dims (16×16×64), block ids, cell encoding (`type + 8 * fluidLevel`) |
 | `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sea-level water, 3D-noise caves, deep lava lakes |
 | `src/tf/noise.ts` | Value noise / fBm built from elementwise tensor ops |
-| `src/tf/blockUpdate.ts` | One block-update tick as a cellular automaton over an `[H, Z, X]` int32 tensor |
-| `src/tf/blockUpdateReference.ts` | The same rules written cell by cell in plain JS: the readable spec, and the oracle the tests compare the TF.js step against |
+| `src/tf/blockUpdateKernel.ts` | All the block-update rules fused into one WebGPU compute shader, run as a TF.js custom kernel (used on WebGPU) |
+| `src/tf/blockUpdate.ts` | The same rules as TF.js tensor ops (used on WebGL / CPU, and as a second implementation for the tests) |
+| `src/tf/blockUpdateReference.ts` | The same rules written cell by cell in plain JS: the readable spec, and the oracle the tests compare both against |
+| `src/tf/kernelCheck.ts` | Runs the fused kernel against the reference on random cells; the game and benchmark run it at startup |
 | `src/tf/simulation.ts` | Batches the awake chunks, each with a one-cell ghost border, steps them, writes back the interiors |
 | `src/tf/random.ts` | Per-cell random numbers made on the GPU (a hash), for the random plant rules |
 | `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`**; falls back to WebGL, then CPU; pre-compiles kernels |
 | `src/world/` | Chunk store, active area / ghost halo tracking, awake (sleeping) chunks, queued edits |
 | `src/render/` | Face-culling mesher, WGSL shaders, WebGPU renderer (opaque pass, line pass, translucent water pass) |
 | `src/player/` | Fly camera + pointer lock, touch controls (dynamic stick, look drag, buttons), voxel DDA ray picking |
-| `src/ui/hotbar.ts` | Block picker (keys 1–4 or tap) |
+| `src/ui/hotbar.ts` | Block picker (keys 1–6 or tap) |
+| `test/gpu/` | WebGPU tests: a page that checks both GPU implementations against the reference, and a Playwright runner |
 
 ## Chunks and the ghost halo
 
@@ -108,10 +112,25 @@ All cells in the region update in parallel from the previous state:
   It pops off without dirt or grass under it, and flowing fluid washes it away.
 - World generation scatters a few grass seeds and small patches of wild wheat; both are also in the hotbar.
 
-The random plant rules get their numbers from a hash of each cell's coordinates and per-tick seeds,
-computed on the GPU (`tf.randomUniform` would generate them in JavaScript). The step takes the random
-numbers as an input, so tests feed the TF.js step and the plain-JS reference the same ones and compare
-cell for cell.
+## Three implementations of the rules
+
+- **Fused WebGPU kernel** (`blockUpdateKernel.ts`), used whenever TF.js runs on WebGPU: one compute
+  shader that works out each cell's next state from its neighbours in a single pass, registered as a
+  TF.js kernel (`tf.engine().runKernel`, tensors in and out). Written as tensor ops, the same rules take
+  about a hundred operations per tick, and each is a full pass over the cells in GPU memory plus a
+  dispatch issued from the main thread. That cost dominated: fused, ticks are many times faster and
+  the main thread spends well under a millisecond issuing one.
+- **Tensor ops** (`blockUpdate.ts`): the fallback on WebGL and CPU, and what the Node tests run.
+- **Reference** (`blockUpdateReference.ts`): plain JS, one cell at a time. The spec.
+
+The plant rules' random numbers make exact comparison possible. The kernel uses an integer hash (PCG)
+of each cell's index and a per-tick seed, which the reference reproduces bit for bit (`cellRandom`).
+The tensor-op version takes its random numbers as an input tensor (made on the GPU with a float hash
+in the game, since `tf.randomUniform` would generate them in JavaScript), so tests feed it and the
+reference the same ones. `npm test` checks the tensor ops against the reference on the CPU backend;
+`npm run test:gpu` checks both GPU implementations against it on a real WebGPU backend, in CI too.
+When the game or benchmark starts on WebGPU it checks the kernel on that GPU, and falls back to the
+tensor ops if it disagrees.
 
 ## TF.js performance notes
 

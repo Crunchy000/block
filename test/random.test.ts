@@ -41,3 +41,21 @@ describe('randomField', () => {
     expect(sameSeed / chunk).toBeLessThan(0.01);
   });
 });
+
+describe('cellRandom (the fused kernel’s random numbers)', () => {
+  it('is uniform in [0, 1) with 24-bit steps, and depends on the seed', async () => {
+    const { cellRandom } = await import('../src/tf/blockUpdateReference');
+    const n = 100_000, bins = new Array(10).fill(0);
+    let sameAcrossSeeds = 0;
+    for (let i = 0; i < n; i++) {
+      const v = cellRandom(i, 0x9e3779b9);
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThan(1);
+      expect(Number.isInteger(v * 2 ** 24)).toBe(true);
+      bins[Math.floor(v * 10)]++;
+      if (v === cellRandom(i, 12345)) sameAcrossSeeds++;
+    }
+    for (const b of bins) expect(Math.abs(b / n - 0.1)).toBeLessThan(0.01);
+    expect(sameAcrossSeeds / n).toBeLessThan(0.001);
+  });
+});

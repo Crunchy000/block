@@ -29,6 +29,22 @@ export const isSoil = (c: number) => isDirt(c) || isGrass(c);
  */
 export const GRASS_REACH = { dx: [-1, 1], dy: [-1, 3], dz: [-1, 1] } as const;
 
+/** Constants of the PCG hash below, shared with the GPU kernel's copy of it. */
+export const PCG = { mul: 747796405, inc: 2891336453, out: 277803737 } as const;
+
+/** PCG-RXS-M-XS 32-bit integer hash. Integer maths, so the GPU computes exactly the same values. */
+export function pcgHash(v: number): number {
+  const state = (Math.imul(v, PCG.mul) + PCG.inc) >>> 0;
+  const word = Math.imul((state >>> ((state >>> 28) + 4)) ^ state, PCG.out) >>> 0;
+  return ((word >>> 22) ^ word) >>> 0;
+}
+
+/**
+ * The random number the fused GPU kernel uses for the cell at flat `index` of its input
+ * on a tick with this `seed`: uniform in [0, 1), 24 bits, so exact in float32.
+ */
+export const cellRandom = (index: number, seed: number) => (pcgHash((index ^ seed) >>> 0) >>> 8) / 16777216;
+
 /** Water near wheat that speeds it up: one block either side, at the plant's level or its soil's. */
 export const WHEAT_WATER_REACH = { dx: [-1, 1], dy: [-1, 0], dz: [-1, 1] } as const;
 

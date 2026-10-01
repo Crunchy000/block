@@ -6,6 +6,7 @@ import {
 import type { Chunk } from '../world/chunk';
 import { Border, type World } from '../world/world';
 import { blockUpdateStep } from './blockUpdate';
+import { blockUpdateFused, fusedAvailable, randomSeed } from './blockUpdateKernel';
 import { randomField } from './random';
 
 /** Ghost cells around each simulated chunk: one tick only reads direct neighbours (diagonals included). */
@@ -24,6 +25,7 @@ const PADDED_VOLUME = CHUNK_HEIGHT * PADDED * PADDED;
  * eight neighbours (active or ghost chunks). The rules only look one cell
  * sideways, so that border is all a chunk needs; the step runs on the whole
  * batch at once, and only the 16x16 interiors are read back and written.
+ * On WebGPU the step is the fused kernel (one GPU pass); elsewhere the tensor-op rules.
  * Cost scales with the number of awake chunks, wherever they are.
  * When nothing is awake the tick is skipped entirely.
  */
@@ -41,6 +43,10 @@ export class Simulation {
   /** Chunks where plants could still change by chance after the last tick. */
   growingChunks = 0;
   asleep = false;
+  /** Use the fused WebGPU kernel when the backend has it (the startup check can turn it off). */
+  useFused = true;
+  /** Whether the last tick ran on the fused kernel. */
+  lastFused = false;
   private buffer = new Int32Array(0);
 
   constructor(private readonly world: World, public rates: PlantRates = DEFAULT_RATES) {}
@@ -66,8 +72,11 @@ export class Simulation {
       this.lastBatch = N;
       this.lastPlants = plants;
 
+      const fused = this.useFused && fusedAvailable();
+      this.lastFused = fused;
       const interior = tf.tidy(() => {
         const input = tf.tensor4d(cells, [N, H, P, P], 'int32');
+        if (fused) return blockUpdateFused(input, { seed: randomSeed(), plants, rates: this.rates, halo: HALO });
         const seeds = [Math.random() * 1024, Math.random() * 1024, Math.random() * 1024] as const;
         const random = plants ? randomField([N, H, P, P], seeds) : undefined;
         return blockUpdateStep(input, random, this.rates).slice([0, 0, HALO, HALO], [N, H, S, S]);
@@ -105,13 +114,10 @@ export class Simulation {
     let changed = 0, growingChunks = 0;
     chunks.forEach((chunk, n) => {
       const data = chunk.data, base = n * CHUNK_VOLUME;
-      let relevant = false, growing = false, plants = false, borders = Border.None;
+      let relevant = false, flags = 0, borders = Border.None;
       for (let i = 0; i < CHUNK_VOLUME; i++) {
         const v = next[base + i], old = data[i];
-        if (isPlant(v)) {
-          plants = true;
-          if (isGrowing(v)) growing = true;
-        }
+        flags |= PLANT_FLAGS[v];
         if (v === old) continue;
         data[i] = v;
         // Priming is bookkeeping: it changes neither how the block looks nor how neighbours behave.
@@ -126,14 +132,14 @@ export class Simulation {
           borders |= x === 0 ? (z === 0 ? Border.NorthWest : Border.SouthWest) : (z === 0 ? Border.NorthEast : Border.SouthEast);
         }
       }
-      chunk.plants = plants;
+      chunk.plants = (flags & PLANT) !== 0;
       if (relevant) {
         changed++;
         this.world.markChanged(chunk, borders);
       }
       // Primed dirt and unripe wheat change by chance, so this chunk isn't settled even if
       // nothing changed this tick.
-      if (growing) {
+      if (flags & GROWING) {
         growingChunks++;
         this.world.wake([chunk]);
       }
@@ -144,6 +150,10 @@ export class Simulation {
 }
 
 const unprimed = (c: number) => (c === PRIMED_DIRT ? Block.Dirt : c);
+
+// Per-cell-value flags, so the write-back loop does one table lookup per cell.
+const PLANT = 1, GROWING = 2;
+const PLANT_FLAGS = Uint8Array.from({ length: 256 }, (_, c) => (isPlant(c) ? PLANT : 0) | (isGrowing(c) ? GROWING : 0));
 
 /** The chunk and its eight neighbours (all loaded while the halo is ready). */
 function aroundChunk(world: World, chunk: Chunk): Chunk[] {

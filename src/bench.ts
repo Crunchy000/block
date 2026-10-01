@@ -1,10 +1,12 @@
 import * as tf from '@tensorflow/tfjs';
 import {
-  Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, DEFAULT_RATES, WHEAT_RIPE, cellLevel, cellType,
+  Block, CHUNK_HEIGHT, CHUNK_VOLUME, DEFAULT_RATES, WHEAT_RIPE, cellLevel, cellType,
 } from './constants';
 import { requestGpu } from './render/gpu';
 import { initTensorflow, warmUpKernels } from './tf/backend';
 import { blockUpdateStep } from './tf/blockUpdate';
+import { blockUpdateFused, fusedAvailable, randomSeed } from './tf/blockUpdateKernel';
+import { checkFusedKernel, type KernelCheck } from './tf/kernelCheck';
 import { randomField } from './tf/random';
 import { HALO, PADDED, Simulation, packChunk } from './tf/simulation';
 import { GEN_BATCH, generateChunks } from './tf/worldgen';
@@ -19,8 +21,10 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const params = new URLSearchParams(location.search);
 /** How long each measurement runs (?quick shortens it, for slow test machines). */
 const BUDGET_MS = params.has('quick') ? 300 : 2000;
-/** Batch sizes to try. 49 is every active chunk; 100 repeats some to see if bigger batches still help. */
-const BATCHES = [1, 4, 16, 49, 100];
+/** Batch sizes to try. 49 is every active chunk; bigger batches repeat chunks. */
+const BATCHES = [1, 4, 16, 49, 100, 200];
+/** The tensor-op rules make ~100 full-size temporaries per tick; past this they need too much GPU memory. */
+const OPS_MAX_BATCH = 100;
 const PADDED_VOLUME = CHUNK_HEIGHT * PADDED * PADDED;
 const TICKS_PER_SECOND = 5;
 /** Receives the result of the write-back comparison so the JIT can't drop it as dead code. */
@@ -79,10 +83,17 @@ const batchOf = (world: World, n: number): Chunk[] => {
   return Array.from({ length: n }, (_, i) => active[i % active.length]);
 };
 
-const step = (cells: tf.Tensor4D, plants: boolean) => blockUpdateStep(
-  cells,
-  plants ? randomField(cells.shape, [Math.random() * 999, Math.random() * 999, Math.random() * 999]) : undefined,
-);
+/** Which implementation of the rules: the fused WebGPU kernel, or the tensor-op version. */
+type Rules = 'fused' | 'ops';
+
+/** One tick of the rules on a padded batch; `halo` strips the ghost border from the output. */
+function step(cells: tf.Tensor4D, plants: boolean, rules: Rules, halo: number): tf.Tensor4D {
+  if (rules === 'fused') return blockUpdateFused(cells, { seed: randomSeed(), plants, halo });
+  const seeds = [Math.random() * 999, Math.random() * 999, Math.random() * 999] as const;
+  const out = blockUpdateStep(cells, plants ? randomField(cells.shape, seeds) : undefined);
+  const [n, h, d, w] = cells.shape;
+  return halo ? out.slice([0, 0, halo, halo], [n, h, d - 2 * halo, w - 2 * halo]) : out;
+}
 
 /** Run `tick` repeatedly for BUDGET_MS (after one warm-up run) and work out the rate. */
 async function measure(n: number, tick: () => Promise<number>): Promise<Rate> {
@@ -101,14 +112,13 @@ async function measure(n: number, tick: () => Promise<number>): Promise<Rate> {
  * The game's tick on a fixed batch of chunks: pack each with its ghost border, run the
  * step, read the interiors back and compare them with the chunks (the world isn't changed).
  */
-function gameLoop(world: World, n: number, plants: boolean): Promise<Rate> {
+function gameLoop(world: World, n: number, plants: boolean, rules: Rules): Promise<Rate> {
   const chunks = batchOf(world, n);
   const cells = new Int32Array(n * PADDED_VOLUME);
   return measure(n, async () => {
     const t0 = performance.now();
     chunks.forEach((c, i) => packChunk(world, c, cells, i * PADDED_VOLUME));
-    const out = tf.tidy(() => step(tf.tensor4d(cells, [n, CHUNK_HEIGHT, PADDED, PADDED], 'int32'), plants)
-      .slice([0, 0, HALO, HALO], [n, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_SIZE]));
+    const out = tf.tidy(() => step(tf.tensor4d(cells, [n, CHUNK_HEIGHT, PADDED, PADDED], 'int32'), plants, rules, HALO));
     const t1 = performance.now();
     const next = (await out.data()) as Int32Array;
     out.dispose();
@@ -124,7 +134,7 @@ function gameLoop(world: World, n: number, plants: boolean): Promise<Rate> {
  * Steps chained on the GPU with no packing or reading back in between: the ceiling if
  * the world's state stayed on the GPU. Each measured round is 4 steps, then one sync.
  */
-async function gpuOnly(world: World, n: number, plants: boolean): Promise<Rate> {
+async function gpuOnly(world: World, n: number, plants: boolean, rules: Rules): Promise<Rate> {
   const cells = new Int32Array(n * PADDED_VOLUME);
   batchOf(world, n).forEach((c, i) => packChunk(world, c, cells, i * PADDED_VOLUME));
   let state = tf.tensor4d(cells, [n, CHUNK_HEIGHT, PADDED, PADDED], 'int32');
@@ -132,7 +142,7 @@ async function gpuOnly(world: World, n: number, plants: boolean): Promise<Rate> 
     return await measure(n * 4, async () => {
       const t0 = performance.now();
       for (let k = 0; k < 4; k++) {
-        const next = tf.tidy(() => step(state, plants));
+        const next = tf.tidy(() => step(state, plants, rules, 0));
         state.dispose();
         state = next;
       }
@@ -153,59 +163,89 @@ const fmtMs = (v: number) => (v >= 100 ? v.toFixed(0) : v.toFixed(1));
 
 async function runBenchmark(): Promise<void> {
   const { backend, gpu, world } = await prepare();
-  const steps = BATCHES.length * 2 + 1;
+  // Check the fused kernel against the reference first: only measure what computes correctly.
+  let check: KernelCheck | undefined;
+  if (fusedAvailable()) {
+    status('Checking the fused kernel against the reference rules…');
+    check = await checkFusedKernel();
+  }
+  const fused = check?.ok === true;
+  const opsBatches = BATCHES.filter((n) => n <= OPS_MAX_BATCH);
+  const steps = (fused ? BATCHES.length * 2 + 1 : 1) + opsBatches.length;
   let done = 0;
-  const next = (what: string) => {
+  const next = (what: string, n: number) => {
     progress(done / steps);
-    status(`${what} (${done + 1} of ${steps})…`);
+    status(`${what}, ${n} chunk${n === 1 ? '' : 's'} (${done + 1} of ${steps})…`);
     done++;
   };
-  const game: Rate[] = [], gpuRates: Rate[] = [];
-  for (const n of BATCHES) {
-    next(`Game tick loop, ${n} chunk${n === 1 ? '' : 's'}`);
-    game.push(await gameLoop(world, n, true));
+  const rows: Row[] = BATCHES.map((n) => ({ n }));
+  if (fused) {
+    for (const row of rows) { next('Fused kernel, game tick loop', row.n); row.fused = await gameLoop(world, row.n, true, 'fused'); }
+    for (const row of rows) { next('Fused kernel, GPU only', row.n); row.gpu = await gpuOnly(world, row.n, true, 'fused'); }
   }
-  for (const n of BATCHES) {
-    next(`GPU only, ${n} chunk${n === 1 ? '' : 's'}`);
-    gpuRates.push(await gpuOnly(world, n, true));
+  for (const row of rows.filter((r) => r.n <= OPS_MAX_BATCH)) {
+    next('Tensor-op rules, game tick loop', row.n);
+    row.ops = await gameLoop(world, row.n, true, 'ops');
   }
-  const bestIndex = game.reduce((b, r, i) => (r.updatesPerSecond > game[b].updatesPerSecond ? i : b), 0);
-  next(`Fluid rules only, ${BATCHES[bestIndex]} chunks`);
-  const fluids = await gameLoop(world, BATCHES[bestIndex], false);
+  const rules: Rules = fused ? 'fused' : 'ops';
+  const best = bestRow(rows, rules);
+  next('Fluid rules only', best.n);
+  const fluids = await gameLoop(world, best.n, false, rules);
   progress(1);
   status(`Done. ${backend} on ${gpu}.`);
-  showResult(game, gpuRates, bestIndex, fluids, backend, gpu);
+  showResult(rows, rules, fluids, check, backend, gpu);
 }
 
-function showResult(game: Rate[], gpuRates: Rate[], best: number, fluids: Rate, backend: string, gpu: string): void {
-  const top = game[best], gpuTop = Math.max(...gpuRates.map((r) => r.updatesPerSecond));
-  const chunksAt5 = Math.floor(top.updatesPerSecond / (CHUNK_VOLUME * TICKS_PER_SECOND));
-  const rows = BATCHES.map((n, i) => `
-    <tr${i === best ? ' class="best"' : ''}>
-      <td>${n}</td>
-      <td>${fmtMs(game[i].ms)} ms</td>
-      <td>${fmtMs(game[i].mainMs)} ms</td>
-      <td>${fmtRate(game[i].updatesPerSecond)}</td>
-      <td>${fmtRate(gpuRates[i].updatesPerSecond)}</td>
-    </tr>`).join('');
+interface Row { n: number; fused?: Rate; gpu?: Rate; ops?: Rate }
+
+const rateOf = (row: Row, rules: Rules) => (rules === 'fused' ? row.fused : row.ops)?.updatesPerSecond ?? 0;
+const bestRow = (rows: Row[], rules: Rules) => rows.reduce((b, r) => (rateOf(r, rules) > rateOf(b, rules) ? r : b));
+
+function showResult(rows: Row[], rules: Rules, fluids: Rate, check: KernelCheck | undefined, backend: string, gpu: string): void {
+  const best = bestRow(rows, rules), top = rateOf(best, rules);
+  const chunksAt5 = Math.floor(top / (CHUNK_VOLUME * TICKS_PER_SECOND));
+  const opsBest = Math.max(...rows.map((r) => r.ops?.updatesPerSecond ?? 0));
+  const gpuTop = Math.max(...rows.map((r) => r.gpu?.updatesPerSecond ?? 0));
+  const cellRate = (r?: Rate) => (r ? fmtRate(r.updatesPerSecond) : '—');
+  const rowsHtml = rows.map((r) => {
+    const main = rules === 'fused' ? r.fused : r.ops;
+    return `
+    <tr${r === best ? ' class="best"' : ''}>
+      <td>${r.n}</td>
+      <td>${main ? `${fmtMs(main.ms)} ms` : '—'}</td>
+      <td>${main ? `${fmtMs(main.mainMs)} ms` : '—'}</td>
+      <td>${cellRate(r.fused)}</td>
+      <td>${cellRate(r.gpu)}</td>
+      <td>${cellRate(r.ops)}</td>
+    </tr>`;
+  }).join('');
+  const checkText = !check
+    ? `The fused kernel needs WebGPU; this backend (${backend}) uses the tensor-op rules.`
+    : check.ok
+      ? `Rules check: the fused GPU kernel matched the reference rules on all ${check.cells.toLocaleString()} cells.`
+      : `Rules check failed, so the tensor-op rules were measured instead: ${check.mismatches} of ${check.cells} cells differ (first: ${check.detail}).`;
   const el = $('result');
   el.hidden = false;
   el.innerHTML = `
-    <div class="headline">${fmtRate(top.updatesPerSecond)} <span class="unit">block updates per second</span></div>
-    <p class="muted">The game's tick loop with every rule (fluids, grass, wheat): packing chunks with their ghost
-      borders, the TF.js step on the GPU, reading results back. Best with ${BATCHES[best]} chunks per tick.</p>
+    <div class="headline">${fmtRate(top)} <span class="unit">block updates per second</span></div>
+    <p class="muted">The game's tick loop with every rule (fluids, grass, wheat) on the
+      ${rules === 'fused' ? 'fused GPU kernel' : 'tensor-op rules'}: packing chunks with their ghost borders, one tick on the GPU,
+      reading results back. Best with ${best.n} chunks per tick.</p>
     <div class="stats">
       <div class="stat"><b>${chunksAt5.toLocaleString()} chunks</b>could keep updating at ${TICKS_PER_SECOND} ticks per second (the view has 49)</div>
-      <div class="stat"><b>${fmtRate(gpuTop)}/s</b>GPU only: steps chained with the state kept on the GPU</div>
-      <div class="stat"><b>${fmtRate(fluids.updatesPerSecond)}/s</b>fluid rules only (no grass or wheat), ${BATCHES[best]} chunks</div>
+      ${rules === 'fused' && opsBest > 0 ? `<div class="stat"><b>${(top / opsBest).toFixed(1)}× faster</b>than the tensor-op rules (${fmtRate(opsBest)}/s at best)</div>` : ''}
+      ${gpuTop > 0 ? `<div class="stat"><b>${fmtRate(gpuTop)}/s</b>GPU only: ticks chained with the state kept on the GPU</div>` : ''}
+      <div class="stat"><b>${fmtRate(fluids.updatesPerSecond)}/s</b>fluid rules only (no grass or wheat), ${best.n} chunks</div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>chunks per tick</th><th>tick</th><th>main thread</th><th>updates/s (game loop)</th><th>updates/s (GPU only)</th></tr></thead>
-      <tbody>${rows}</tbody>
+      <thead><tr><th>chunks per tick</th><th>tick</th><th>main thread</th><th>fused kernel</th><th>fused, GPU only</th><th>tensor-op rules</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
     </table></div>
-    <p class="muted" style="margin-top:12px">One block update = one cell's next state for one tick, counting the
-      16×16×64 cells of each chunk (not its ghost border). Each figure is the average over ~${BUDGET_MS / 1000} s.
-      Batches over 49 chunks repeat chunks. ${backend} on ${gpu}.</p>`;
+    <p class="muted" style="margin-top:12px">${checkText}</p>
+    <p class="muted">Updates per second for each way of running the rules. One block update = one cell's next
+      state for one tick, counting the 16×16×64 cells of each chunk (not its ghost border). Each figure is the
+      average over ~${BUDGET_MS / 1000} s. Batches over 49 chunks repeat chunks; the tensor-op rules stop at
+      ${OPS_MAX_BATCH} (they need too much GPU memory beyond that). ${backend} on ${gpu}.</p>`;
 }
 
 async function runTakeover(): Promise<void> {

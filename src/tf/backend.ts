@@ -2,6 +2,7 @@ import * as tf from '@tensorflow/tfjs';
 import { WebGPUBackend } from '@tensorflow/tfjs-backend-webgpu';
 import { CHUNK_HEIGHT, CHUNK_SIZE } from '../constants';
 import { blockUpdateStep } from './blockUpdate';
+import { blockUpdateFused } from './blockUpdateKernel';
 import { randomField } from './random';
 import { HALO, PADDED } from './simulation';
 import { GEN_BATCH, generateChunksTensor } from './worldgen';
@@ -84,6 +85,7 @@ export async function warmUpKernels(): Promise<void> {
       const cells = tf.zeros([...batch], 'int32') as tf.Tensor4D;
       interior(blockUpdateStep(cells));
       interior(blockUpdateStep(cells, randomField(batch, [1, 2, 3])));
+      if (backend === 'webgpu') blockUpdateFused(cells, { seed: 1, plants: true, halo: HALO });
     });
     await (tf.backend() as unknown as { checkCompileCompletionAsync(): Promise<unknown> }).checkCompileCompletionAsync();
   } finally {

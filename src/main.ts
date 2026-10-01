@@ -7,6 +7,8 @@ import { fpsView, multiply, perspective } from './render/math';
 import { meshChunk } from './render/mesher';
 import { Renderer } from './render/renderer';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
+import { fusedAvailable } from './tf/blockUpdateKernel';
+import { checkFusedKernel } from './tf/kernelCheck';
 import { Simulation } from './tf/simulation';
 import { GEN_BATCH, generateChunks } from './tf/worldgen';
 import { HOTBAR_BLOCKS, createHotbar } from './ui/hotbar';
@@ -41,6 +43,15 @@ async function main(): Promise<void> {
   } catch (e) {
     console.warn('kernel warm-up failed; kernels will compile on first use', e);
   }
+  // Check the fused rules kernel against the reference on this GPU; if it disagrees
+  // (or fails), block updates use the tensor-op rules instead.
+  let fusedOk = false;
+  if (fusedAvailable()) {
+    setStatus('Checking the block-update kernel…');
+    const check = await checkFusedKernel().catch((e: unknown) => ({ ok: false, detail: String(e) }));
+    fusedOk = check.ok;
+    if (!check.ok) console.warn('Fused block-update kernel disagrees with the reference; using tensor-op rules.', check.detail);
+  }
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
   let switching = false;
@@ -68,6 +79,7 @@ async function main(): Promise<void> {
     ...(params.has('spread') && { grassSpread: chance('spread') }),
     ...(params.has('grow') && { wheatGrow: chance('grow'), wheatGrowWet: chance('grow') }),
   });
+  sim.useFused = fusedOk;
   // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen
   const pos = (params.get('pos') ?? '8,52,8').split(',').map(Number) as [number, number, number];
   const controls = new Controls(canvas, pos);
@@ -237,7 +249,7 @@ async function main(): Promise<void> {
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit));
 
     hud.textContent = [
-      `fps ${fps.toFixed(0)}   tf backend: ${tfBackend}   gpu: ${gpuName}`,
+      `fps ${fps.toFixed(0)}   tf backend: ${tfBackend} (${sim.lastFused ? 'fused rules kernel' : 'tensor-op rules'})   gpu: ${gpuName}`,
       `pos ${px.toFixed(1)} ${py.toFixed(1)} ${pz.toFixed(1)}   chunk ${world.window.cx},${world.window.cz}`,
       `chunks: ${world.activeChunks().length} active (${world.awakeCount()} awake, ${sim.growingChunks} growing plants), ${world.ghostChunks().length} ghost (halo)`,
       `block updates: ${blockUpdateStatus()}`,
