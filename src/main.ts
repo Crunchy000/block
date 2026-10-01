@@ -120,6 +120,7 @@ async function main(): Promise<void> {
   // (Safari's click events don't say which pointer made them, so remember it from pointerdown.)
   // The benchmark link sits on the start screen; following it shouldn't start the game too.
   $('bench-link').addEventListener('click', (e) => e.stopPropagation());
+  $('log-link').addEventListener('click', (e) => e.stopPropagation());
   let startPointer = 'mouse';
   overlay.addEventListener('pointerdown', (e) => { startPointer = e.pointerType; });
   overlay.addEventListener('click', (e) => {
@@ -174,7 +175,12 @@ async function main(): Promise<void> {
     if (generating || switching || world.missingChunks(1).length === 0) return;
     generating = true;
     generateMissing(world)
-      .then(() => device.queue.onSubmittedWorkDone())
+      .then(async (n) => {
+        await device.queue.onSubmittedWorkDone();
+        // Each batch in the log, so a crash while generating shows how far it got.
+        const { loaded, total } = world.haloProgress();
+        log.info(`Generated ${n} chunks (${loaded} / ${total})`);
+      })
       .catch(onTfError('worldgen'))
       .finally(() => { generating = false; });
   };

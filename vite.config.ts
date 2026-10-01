@@ -25,6 +25,7 @@ export default defineConfig({
       input: {
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         bench: fileURLToPath(new URL('./bench.html', import.meta.url)),
+        log: fileURLToPath(new URL('./log.html', import.meta.url)),
       },
     },
   },

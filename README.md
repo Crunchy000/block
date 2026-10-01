@@ -39,8 +39,8 @@ an error has happened) shows the page log, with **Copy** and **Share** buttons f
 It records the startup steps, the browser and GPU (adapter, features and limits), and everything that goes
 wrong: errors with their stack traces, failed promises, console errors and warnings, WebGPU validation and
 shader-compile errors, and a lost GPU device with the browser's reason. It's a plain script (`public/log.js`)
-loaded before the game, so it also catches errors that stop the game loading, and it keeps the previous
-visits' logs, since a GPU crash can force a reload. If the GPU device is lost the game stops and says so.
+loaded before the game, so it also catches errors that stop the game loading. It keeps the previous
+visits' logs, saved as they happen: if the game crashes the whole tab, open `log.html` (linked from the start screen) to see and copy them without starting WebGPU. If the GPU device is lost the game stops and says so.
 After a GPU crash, browsers can switch WebGPU off for a while: fully close and reopen the browser.
 
 **Benchmark:** the start screen's *Benchmark this device* button opens `bench.html`

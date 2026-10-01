@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Block Log</title>
+    <!-- Shows the logs the game and benchmark saved (public/log.js), without starting WebGPU, so it
+         works even when the game crashes the tab. -->
+    <script src="./log.js"></script>
+    <style>
+      body { margin: 0; background: #0f1115; color: #d8dbe2; font: 14px/1.6 ui-monospace, Menlo, Consolas, monospace; padding: 24px 16px; }
+      a { color: #8cf; }
+    </style>
+  </head>
+  <body>
+    <p>The logs of your last visits to the game and the benchmark. <a href="#" id="show">Show the log</a> · <a href="./">Back to the game</a></p>
+    <script>
+      document.getElementById('show').addEventListener('click', function (e) { e.preventDefault(); window.blockLog.open(); });
+      window.blockLog.open();
+    </script>
+  </body>
+</html>

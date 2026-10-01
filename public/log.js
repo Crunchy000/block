@@ -142,9 +142,7 @@
     return out.join('\n\n');
   }
 
-  var saveTimer = 0;
   function save() {
-    saveTimer = 0;
     try {
       var visits = [{ started: new Date(started).toISOString(), text: visitText() }].concat(previousVisits.slice(0, KEPT_VISITS - 1));
       localStorage.setItem(STORE_KEY, JSON.stringify(visits));
@@ -198,7 +196,6 @@
     guard(button);
     button.addEventListener('click', open);
     document.body.appendChild(button);
-    // The button stays out of the way while playing, unless something has gone wrong.
     if (window.MutationObserver) new MutationObserver(updateButton).observe(document.body, { attributes: true, attributeFilter: ['class'] });
     updateButton();
   }
@@ -209,7 +206,6 @@
     button.className = 'blog-button' + (c.errors ? ' error' : c.warnings ? ' warn' : '');
     button.textContent = c.errors ? 'Log · ' + c.errors + ' error' + (c.errors > 1 ? 's' : '')
       : c.warnings ? 'Log · ' + c.warnings + ' warning' + (c.warnings > 1 ? 's' : '') : 'Log';
-    button.hidden = document.body.classList.contains('playing') && !c.errors;
   }
 
   function buildPanel() {
@@ -288,7 +284,9 @@
   }
 
   function changed() {
-    if (!saveTimer) saveTimer = setTimeout(save, 300);
+    // Saved straight away: if the page crashes (a GPU crash can take the whole tab down), the log
+    // up to that moment is still there for log.html.
+    save();
     updateButton();
     if (panel && !panel.hidden) textarea.value = fullText();
   }
