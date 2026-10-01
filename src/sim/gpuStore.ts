@@ -4,6 +4,7 @@ import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, type PlantRates } from '
 import type { RayHit } from '../player/raycast';
 import { GpuMesher } from '../render/gpuMesher';
 import { MeshPool } from '../render/meshPool';
+import { GpuWorldgen, type GenJob } from './gpuWorldgen';
 import { RULES_WGSL } from './rules';
 import { AROUND, SELF, TickFlag, type CellStore, type MeshJob, type MeshTarget, type StagedChunks } from './store';
 
@@ -223,7 +224,7 @@ export class GpuStore implements CellStore {
   private constructor(
     readonly device: GPUDevice, readonly ring: number,
     private readonly simPipeline: GPUComputePipeline, private readonly rayPipeline: GPUComputePipeline,
-    private readonly mesher: GpuMesher,
+    private readonly mesher: GpuMesher, worldgen: GPUComputePipeline,
   ) {
     const slots = ring * ring;
     const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
@@ -237,6 +238,13 @@ export class GpuStore implements CellStore {
       entries: [this.ray, this.cells, this.slotInfo, this.rayResult].map((buffer, binding) => ({ binding, resource: { buffer } })),
     });
     this.readbacks = new Readbacks(device);
+    this.generator = new GpuWorldgen(device, this.cells, worldgen);
+  }
+
+  private readonly generator: GpuWorldgen;
+
+  generate(chunks: GenJob[], seed?: number): void {
+    this.generator.generate(chunks, seed);
   }
 
   /** Compiles its shaders without blocking the page. */
@@ -244,8 +252,10 @@ export class GpuStore implements CellStore {
     const pipeline = (label: string, code: string) => device.createComputePipelineAsync({
       label, layout: 'auto', compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
     });
-    const [sim, ray, mesher] = await Promise.all([pipeline('block updates', SIM_WGSL), pipeline('picking', RAY_WGSL), GpuMesher.create(device)]);
-    return new GpuStore(device, ring, sim, ray, mesher);
+    const [sim, ray, mesher, worldgen] = await Promise.all([
+      pipeline('block updates', SIM_WGSL), pipeline('picking', RAY_WGSL), GpuMesher.create(device), GpuWorldgen.compile(device),
+    ]);
+    return new GpuStore(device, ring, sim, ray, mesher, worldgen);
   }
 
   /** Bytes of GPU memory the world's cells take. */
@@ -377,5 +387,6 @@ export class GpuStore implements CellStore {
 
   destroy(): void {
     for (const b of [this.cells, this.slotInfo, this.uniforms, this.ray, this.rayResult, this.stepped, this.jobs, this.flags]) b?.destroy();
+    this.generator.destroy();
   }
 }

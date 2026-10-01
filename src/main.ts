@@ -406,7 +406,7 @@ async function main(): Promise<void> {
 
     const saved = world.savedCount(), counts = world.counts();
     hud.textContent = [
-      `fps ${fps.toFixed(0)}   gpu: ${gpuName}   world generation: TF.js on ${tfBackend}`,
+      `fps ${fps.toFixed(0)}   gpu: ${gpuName}   world generation: ${store.generate ? 'compute shader' : `TF.js on ${tfBackend}`}`,
       `pos ${px.toFixed(1)} ${py.toFixed(1)} ${pz.toFixed(1)}   chunk ${world.window.cx},${world.window.cz}`,
       `chunks: ${counts.inView} in view (${draws.length} drawn), ${counts.active} simulated (${world.awakeCount()} awake, ` +
         `${sim.growingChunks} growing plants)${saved ? `, ${saved} changed ones saved` : ''}`,

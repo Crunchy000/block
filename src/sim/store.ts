@@ -2,6 +2,7 @@ import type * as tf from '@tensorflow/tfjs';
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, PRIMED_DIRT, type PlantRates } from '../constants';
 import type { RayHit } from '../player/raycast';
 import type { ChunkFaces } from '../render/mesher';
+import type { GenJob } from './gpuWorldgen';
 
 /**
  * Where the world's cells live, and the operations on them. The game keeps them on the
@@ -16,6 +17,8 @@ import type { ChunkFaces } from '../render/mesher';
  * ghost halo, so every loaded chunk has its own slot, and moving reuses the slots of
  * chunks that drop out.
  */
+export type { GenJob };
+
 export interface CellStore {
   /** Slots per side of the ring. */
   readonly ring: number;
@@ -29,6 +32,11 @@ export interface CellStore {
   readChunk(slot: number): Promise<Int32Array>;
   /** Generated chunks [N, H, 16, 16] (int32), ready to be written into slots. */
   stage(cells: tf.Tensor): Promise<StagedChunks>;
+  /**
+   * Generate chunks straight into their slots, if this store can (the GPU store: one
+   * compute shader, see sim/gpuWorldgen.ts). Otherwise chunks come from TF.js via stage().
+   */
+  generate?(chunks: GenJob[], seed?: number): void;
   /**
    * One block-update tick for some chunks. `jobs` holds AROUND slots per chunk: the
    * 3x3 chunks around it, row by row (z, then x), the chunk itself in the middle.

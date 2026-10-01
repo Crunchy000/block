@@ -140,6 +140,37 @@ async function checkWorlds(device: GPUDevice): Promise<Result> {
   }
 }
 
+/**
+ * The worldgen shader against TF.js world generation (on the same GPU), over a few areas
+ * near and far from the origin. They do the same float ops in the same order, so they
+ * agree but for the odd cell where the shader compiler fuses or rounds differently.
+ */
+async function checkWorldgen(device: GPUDevice): Promise<Result> {
+  const name = 'worldgen shader matches TF.js world generation';
+  let cells = 0, differ = 0, first = '';
+  for (const [ox, oz] of [[0, 0], [37, -12], [-900, 2500]]) {
+    const worlds = await Promise.all([false, true].map(async (viaTensorflow) => {
+      const world = new World(await GpuStore.create(device, ringSize(3)), 1, 3);
+      world.recenter(ox * CHUNK_SIZE, oz * CHUNK_SIZE);
+      await generateAll(world, undefined, viaTensorflow);
+      return world;
+    }));
+    for (const [key, chunk] of worlds[0].chunks) {
+      const other = worlds[1].chunks.get(key)!;
+      const [a, b] = await Promise.all([worlds[0].store.readChunk(chunk.slot), worlds[1].store.readChunk(other.slot)]);
+      cells += a.length;
+      a.forEach((v, i) => {
+        if (v === b[i]) return;
+        differ++;
+        first ||= `chunk ${key} cell ${i} (x${i & 15} y${i >> 8} z${(i >> 4) & 15}): ${v}, TF.js ${b[i]}`;
+      });
+    }
+    for (const w of worlds) (w.store as GpuStore).destroy();
+  }
+  // A cell in 10,000 may round differently; more means the shader computes something else.
+  return { name, ok: differ <= cells / 10000, detail: `${differ} of ${cells.toLocaleString()} cells differ${first ? `; first: ${first}` : ''}` };
+}
+
 async function main(): Promise<void> {
   if (!navigator.gpu || !(await navigator.gpu.requestAdapter())) {
     (window as unknown as { gpuTests: unknown }).gpuTests = { skipped: 'no WebGPU adapter', results };
@@ -161,6 +192,8 @@ async function main(): Promise<void> {
     const r = await checkGpuStore(device, seed, 4, 256);
     report(`GPU-resident world matches the reference: ticks, flags, meshes, picking (seed ${seed})`, r.ok, r.ok ? r.summary : r.detail);
   }
+  const gen = await checkWorldgen(device);
+  report(gen.name, gen.ok, gen.detail);
   const worlds = await checkWorlds(device);
   report(worlds.name, worlds.ok, worlds.detail);
   const before = tf.memory().numTensors;

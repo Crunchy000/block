@@ -1,7 +1,8 @@
 # Block
 
-A Minecraft-style voxel world: **world generation runs in TensorFlow.js**, and the world then
-**lives in GPU memory**, where block updates, meshing and picking run as WebGPU compute shaders
+A Minecraft-style voxel world: **world generation is written in TensorFlow.js** (and run as one
+compute shader ported from it), and the world **lives in GPU memory**, where generation, block
+updates, meshing and picking run as WebGPU compute shaders
 and a hand-written **WebGPU** renderer draws it. The CPU keeps only bookkeeping (which chunks are
 where, which are awake); per tick it gets back a few bytes of flags.
 
@@ -83,7 +84,8 @@ grass and wheat taking over the terrain around spawn and logs tick times.
 | `src/tf/noise.ts` | Value noise / fBm built from elementwise tensor ops |
 | `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`** (so worldgen output can be copied GPU to GPU); falls back to WebGL, then CPU; pre-compiles kernels |
 | `src/sim/rules.ts` | Every block-update rule as WGSL, shared by the GPU world and the TF.js kernel |
-| `src/sim/gpuStore.ts` | **The world in GPU memory**: ticks in place, per-chunk flags, picking, chunk reads/writes, worldgen copied in GPU to GPU |
+| `src/sim/gpuStore.ts` | **The world in GPU memory**: ticks in place, per-chunk flags, picking, chunk reads/writes |
+| `src/sim/gpuWorldgen.ts` | World generation as one compute shader, straight into the world's slots (`tf/worldgen.ts` ported op for op) |
 | `src/sim/cpuStore.ts` | The same operations on the CPU with the reference code: the Node tests' world, the GPU tests' oracle, the fallback |
 | `src/sim/simulation.ts` | Ticks the awake chunks and acts on the flags that come back |
 | `src/sim/check.ts` | Runs the GPU world against the reference on random cells; the game and benchmark run it at startup |
@@ -119,8 +121,14 @@ All the cells are in one storage buffer: a ring of 9×9 chunk slots (the active 
 ring), chunk (cx, cz) in slot (cx mod 9, cz mod 9). Moving reuses the slots of the chunks that drop
 out, so nothing is ever shifted around, and a chunk's neighbours are always the slots next to its own.
 
-- **World generation** runs in TF.js on the same `GPUDevice`, and its output is copied into the slots
-  GPU to GPU.
+- **World generation** is one compute shader (`src/sim/gpuWorldgen.ts`) that writes chunks straight
+  into their slots: one thread per column works out the ground height and plants once, then fills its
+  64 cells, with cave noise only where caves can be. It is `src/tf/worldgen.ts` op for op (the TF.js
+  version stays the reference and the generator for a world on the CPU); the GPU tests require them
+  to agree on all but 1 cell in 10,000 (rounding in cave noise far from the origin), and in practice
+  11 of 2.4 million differ. As TF.js ops a batch of 16 chunks was ~800 dispatches and ~25 ms of main
+  thread, so frames dropped while you walked; the shader is one dispatch, 0.2 ms of main thread, and
+  about 50 times faster overall (0.35 ms a chunk on a software GPU, 17 ms before).
 - **Block updates** run where the cells are. A tick takes the awake chunks and, for each, the slots
   of its eight neighbours; one compute pass works out every cell's next state (into a scratch buffer,
   so all chunks step from the same state) and ORs each cell's *flags* into its chunk's flags word:
@@ -186,7 +194,8 @@ everything the GPU world does with reference code (the rules, the mesher, the ra
 can compare the two exactly: `npm test` runs the world logic on it (halo, sleeping, flags, saving
 chunks, plants) and checks the tensor ops against the reference; `npm run test:gpu` runs on a real
 WebGPU device, in CI too, and compares ticks, flags, meshes and picking on random cells, a whole game
-session (worldgen, edits, ticks, moving away and back) on both stores, and the TF.js versions. The
+session (worldgen, edits, ticks, moving away and back) on both stores, the worldgen shader against
+TF.js generation, and the TF.js versions. The
 game and the benchmark run a small version of that check at startup; if this GPU disagrees, the game
 keeps its world on the CPU instead.
 
