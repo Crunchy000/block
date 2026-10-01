@@ -8,6 +8,8 @@ import { blockShader, classicBlockShader, farShader, lineShader } from './shader
 const DEPTH: GPUTextureFormat = 'depth32float';
 
 export const SKY: [number, number, number] = [0.55, 0.75, 0.95];
+/** In mist, fog stops this thick: chunks past the fog keep a trace of themselves, and the far terrain carries on from there. */
+export const MIST_FOG = 0.85;
 
 /** The far terrain to draw (world/farTerrain.ts): an indexed triangle list of positions. */
 export interface FarDraw {
@@ -18,8 +20,10 @@ export interface FarDraw {
   near: [number, number, number, number];
   /** The y of the sea's surface. */
   seaY: number;
-  /** A dark silhouette instead of colours. */
-  silhouette: boolean;
+  /** How it looks: mist (a little darker than the fog), a dark silhouette, or colours. */
+  look: 'mist' | 'silhouette' | 'colour';
+  /** How far it reaches (blocks). */
+  extent: number;
 }
 
 export interface RendererOptions {
@@ -93,7 +97,7 @@ export class Renderer {
       this.context.configure({ device, format: this.format, alphaMode: 'opaque' });
     }
 
-    this.uniformBuffer = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.uniformBuffer = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const safe = this.options.safe === true;
     // Uniforms, then (except in safe mode) the meshes' face records and chunk origins, read by the vertex shader.
     const uniformEntry: GPUBindGroupLayoutEntry = { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} };
@@ -257,10 +261,11 @@ export class Renderer {
     if (this.options.offscreen && this.frameInFlight) return;
     this.resize();
     const { device } = this;
-    const u = new Float32Array(24);
+    const u = new Float32Array(28);
     u.set(viewProj, 0);
     u.set([cam[0], cam[1], cam[2], time], 16);
     u.set([...SKY, fogDistance], 20);
+    u.set([far?.look === 'mist' ? MIST_FOG : 1, 0, 0, 0], 24);
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
 
     if (lines.length > 0 && (!this.lineBuffer || this.lineBuffer.size < lines.byteLength)) {
@@ -268,7 +273,7 @@ export class Renderer {
       this.lineBuffer = device.createBuffer({ size: Math.max(lines.byteLength, 1 << 16), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     }
     if (lines.length > 0) device.queue.writeBuffer(this.lineBuffer!, 0, lines);
-    if (far) device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([...far.near, far.seaY, far.silhouette ? 1 : 0, 0, 0]));
+    if (far) device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([...far.near, far.seaY, ['colour', 'silhouette', 'mist'].indexOf(far.look), far.extent, 0]));
 
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({

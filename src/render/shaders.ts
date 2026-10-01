@@ -6,6 +6,7 @@ struct Uniforms {
   viewProj: mat4x4f,
   camPos: vec4f,   // xyz = camera, w = time (s)
   sky: vec4f,      // rgb = sky / fog colour, w = fog distance
+  fogCap: vec4f,   // x = how thick the fog gets (1 = plain sky; less in mist, so far terrain shows through)
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 `;
@@ -148,7 +149,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   var lit = base * mix((0.6 + 0.4 * diffuse) * side, 1.0, emissive);
 
   let dist = distance(in.world, u.camPos.xyz);
-  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, 1.0);
+  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, u.fogCap.x);
   lit = mix(lit, u.sky.rgb, fog);
   return vec4f(lit, alpha);
 }
@@ -156,7 +157,8 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 
 /**
  * Far terrain (world/farTerrain.ts): a height field of plain vertex positions, flat shaded
- * from screen-space derivatives. Either a dark silhouette hazing into the sky, or colours:
+ * from screen-space derivatives. Either mist (colours under thick fog, thinning into the sky
+ * toward the far edge), a dark silhouette hazing into the sky, or colours:
  * grass on land (bare dirt on steep slopes), water at the sea's surface, the blocks' sun
  * and fog. Not drawn where real chunks are.
  */
@@ -164,7 +166,7 @@ export const farShader = /* wgsl */ `
 ${uniforms}
 struct Far {
   near: vec4f,   // xz min, xz max of the area the real chunks cover
-  sea: vec4f,    // x = y of the sea's surface, y = 1 for a dark silhouette instead of colours
+  sea: vec4f,    // x = y of the sea's surface, y = look (0 colours, 1 silhouette, 2 mist), z = how far it reaches
 };
 @group(0) @binding(1) var<uniform> far: Far;
 
@@ -193,7 +195,8 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   if (all(in.world.xz >= far.near.xy) && all(in.world.xz < far.near.zw)) { discard; }
 
   let dist = distance(in.world, u.camPos.xyz);
-  if (far.sea.y > 0.5) {
+  let sun = normalize(vec3f(0.4, 0.85, 0.3));
+  if (far.sea.y > 0.5 && far.sea.y < 1.5) {
     // Silhouette: near-black land against the sky, hazier with distance so ridges stand apart.
     let haze = 0.75 * pow(clamp(dist / u.sky.w, 0.0, 1.0), 0.6);
     let shade = 0.9 + 0.1 * normal.y;
@@ -211,11 +214,14 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     base = mix(dirt, green, smoothstep(0.55, 0.8, normal.y));
   }
 
-  let sun = normalize(vec3f(0.4, 0.85, 0.3));
   let diffuse = max(dot(normal, sun), 0.0);
   var lit = base * (0.6 + 0.4 * diffuse);
 
-  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, 1.0);
+  var fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, u.fogCap.x);
+  if (far.sea.y > 1.5) {
+    // Mist: as thick as the chunks' capped fog at their edge, thinning to plain sky at the far edge.
+    fog = max(fog, mix(u.fogCap.x, 1.0, sqrt(clamp(dist / far.sea.z, 0.0, 1.0))));
+  }
   lit = mix(lit, u.sky.rgb, fog);
   return vec4f(lit, 1.0);
 }
@@ -325,7 +331,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   var lit = base * mix((0.6 + 0.4 * diffuse) * side, 1.0, emissive);
 
   let dist = distance(in.world, u.camPos.xyz);
-  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, 1.0);
+  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, u.fogCap.x);
   lit = mix(lit, u.sky.rgb, fog);
   return vec4f(lit, alpha);
 }

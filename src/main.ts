@@ -54,16 +54,16 @@ function viewDistance(params: URLSearchParams, device: GPUDevice, safe: boolean)
 }
 
 /** How the far terrain looks, if at all. */
-type FarStyle = 'silhouette' | 'colour' | 'off';
-const FAR_STYLES: FarStyle[] = ['silhouette', 'colour', 'off'];
+type FarStyle = 'mist' | 'silhouette' | 'colour' | 'off';
+const FAR_STYLES: FarStyle[] = ['mist', 'silhouette', 'colour', 'off'];
 
-/** ?far=silhouette|colour|off (0 is off), else the start screen's choice, else a silhouette. */
+/** ?far=mist|silhouette|colour|off (0 is off), else the start screen's choice, else mist. */
 function farStyle(params: URLSearchParams): FarStyle {
   let stored: string | null = null;
   try { stored = localStorage.getItem(FAR_KEY); } catch { /* storage blocked */ }
   const asked = params.get('far') ?? stored;
   if (asked === '0') return 'off';
-  return FAR_STYLES.find((s) => s === asked) ?? 'silhouette';
+  return FAR_STYLES.find((s) => s === asked) ?? 'mist';
 }
 
 /** The far terrain switch on the start screen, under the view distances: remembered, and reloads. */
@@ -391,7 +391,8 @@ async function main(): Promise<void> {
     setStatus(!world.simReady() ? `Generating world… ${loaded} / ${total} chunks` : loaded < total ? `${play} (loading ${loaded} / ${total} chunks)` : play, false);
 
     far?.update(eye[0], eye[2]);
-    const fogDistance = far ? far.extent : world.viewRadius * CHUNK_SIZE + 8;
+    // In mist the chunks fade into the fog as without far terrain; the other looks push the fog out to its edge.
+    const fogDistance = far && farLook !== 'mist' ? far.extent : world.viewRadius * CHUNK_SIZE + 8;
     const proj = perspective((70 * Math.PI) / 180, renderer.aspect, 0.1);
     const viewProj = multiply(proj, fpsView(eye, controls.yaw, controls.pitch));
     // Only chunks the camera can see.
@@ -399,7 +400,7 @@ async function main(): Promise<void> {
     const draws = world.draws((x, z) => inView([x * CHUNK_SIZE, 0, z * CHUNK_SIZE], [(x + 1) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 1) * CHUNK_SIZE]));
     const { cx: wcx, cz: wcz } = world.window, vr = world.viewRadius;
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws, far?.ready ? {
-      vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE, silhouette: farLook === 'silhouette',
+      vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE, look: farLook as 'mist' | 'silhouette' | 'colour', extent: far.extent,
       near: [(wcx - vr) * CHUNK_SIZE, (wcz - vr) * CHUNK_SIZE, (wcx + vr + 1) * CHUNK_SIZE, (wcz + vr + 1) * CHUNK_SIZE],
     } : undefined);
 

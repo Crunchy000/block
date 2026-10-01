@@ -35,12 +35,14 @@ as in Minecraft. Meshes are packed into one face buffer at their real size (a fe
 in the camera's view are drawn, and depth is reversed with a float depth buffer so distant terrain stays steady. The
 game is playable as soon as the area around you is loaded; the distance keeps loading, nearest first.
 
-**Far terrain** (a dark silhouette by default; colours or off on the start screen, or `?far=colour` / `?far=off`): beyond the chunks, the land
+**Far terrain** (mist by default; silhouette, colour or off on the start screen, or `?far=silhouette` and so on): beyond the chunks, the land
 is drawn out to 2 km as one low-detail height field, in the spirit of Distant Horizons' level-of-detail chunks. The
 ground's height is a formula (`terrainHeight` in `src/tf/worldgen.ts`, the one generation uses), so the far terrain
 needs no chunks: it samples the formula on a grid around you (points 4 blocks apart nearby, up to 64 apart far away,
-about 37,000 in all, 1.3 MB), recentred every 64 blocks you travel, and draws it as a near-black silhouette that
-hazes into the sky with distance, or in colour: grass, bare slopes and sea with the blocks' lighting and fog. It isn't drawn where real chunks are. It has no caves, plants or edits, only the shape of
+about 37,000 in all, 1.3 MB), recentred every 64 blocks you travel. In mist the chunks fade into the fog as usual
+but the fog stops 85% thick, and the far terrain carries on from there, thinning into the sky toward its edge: faint
+hills and coastlines through the haze. The other looks are a near-black silhouette that hazes into the sky, and
+plain colour (grass, bare slopes and sea with the blocks' lighting, fog pushed out to 2 km). It isn't drawn where real chunks are. It has no caves, plants or edits, only the shape of
 the land, and plain vertex buffers, so safe mode shows it too (`src/world/farTerrain.ts`).
 
 **Safe mode** (`?safe`, linked from the start screen): the world on the CPU and the previous renderer (meshes built
