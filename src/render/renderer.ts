@@ -18,6 +18,8 @@ export interface FarDraw {
   near: [number, number, number, number];
   /** The y of the sea's surface. */
   seaY: number;
+  /** A dark silhouette instead of colours. */
+  silhouette: boolean;
 }
 
 export interface RendererOptions {
@@ -266,7 +268,7 @@ export class Renderer {
       this.lineBuffer = device.createBuffer({ size: Math.max(lines.byteLength, 1 << 16), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     }
     if (lines.length > 0) device.queue.writeBuffer(this.lineBuffer!, 0, lines);
-    if (far) device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([...far.near, far.seaY, 0, 0, 0]));
+    if (far) device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([...far.near, far.seaY, far.silhouette ? 1 : 0, 0, 0]));
 
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({

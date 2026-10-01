@@ -53,28 +53,34 @@ function viewDistance(params: URLSearchParams, device: GPUDevice, safe: boolean)
   return Math.min(maxViewDistance(device, safe), Math.max(1, Math.floor(asked) || ACTIVE_RADIUS));
 }
 
-/** ?far=0/1, else the start screen's choice, else on. */
-function farTerrainOn(params: URLSearchParams): boolean {
+/** How the far terrain looks, if at all. */
+type FarStyle = 'silhouette' | 'colour' | 'off';
+const FAR_STYLES: FarStyle[] = ['silhouette', 'colour', 'off'];
+
+/** ?far=silhouette|colour|off (0 is off), else the start screen's choice, else a silhouette. */
+function farStyle(params: URLSearchParams): FarStyle {
   let stored: string | null = null;
   try { stored = localStorage.getItem(FAR_KEY); } catch { /* storage blocked */ }
-  return (params.get('far') ?? stored ?? '1') !== '0';
+  const asked = params.get('far') ?? stored;
+  if (asked === '0') return 'off';
+  return FAR_STYLES.find((s) => s === asked) ?? 'silhouette';
 }
 
 /** The far terrain switch on the start screen, under the view distances: remembered, and reloads. */
-function showFarTerrain(on: boolean): void {
+function showFarTerrain(current: FarStyle): void {
   const box = $('view-distance');
   box.append(document.createElement('br'), 'Far terrain: ');
-  for (const [label, value] of [['on', true], ['off', false]] as const) {
+  for (const style of FAR_STYLES) {
     const b = document.createElement('button');
     b.type = 'button';
-    b.textContent = label;
-    b.className = value === on ? 'chosen' : '';
+    b.textContent = style;
+    b.className = style === current ? 'chosen' : '';
     b.addEventListener('click', (e) => {
       e.stopPropagation();
-      try { localStorage.setItem(FAR_KEY, value ? '1' : '0'); } catch { /* storage blocked */ }
+      try { localStorage.setItem(FAR_KEY, style); } catch { /* storage blocked */ }
       const url = new URL(location.href);
-      if (url.searchParams.has('far')) url.searchParams.set('far', value ? '1' : '0');
-      if (value !== on) location.href = url.toString();
+      url.searchParams.delete('far');
+      if (style !== current) location.href = url.toString();
     });
     box.append(b, ' ');
   }
@@ -145,8 +151,8 @@ async function main(): Promise<void> {
   const ghostRadius = viewRadius + 1;
   log.info(`View distance ${viewRadius} (${(2 * viewRadius + 1) ** 2} chunks drawn), simulation distance ${activeRadius}`);
   showViewDistances(viewRadius, maxViewDistance(device, safe), safe);
-  const farOn = farTerrainOn(params);
-  showFarTerrain(farOn);
+  const farLook = farStyle(params);
+  showFarTerrain(farLook);
   // The world lives in GPU memory, where block updates, meshing and picking run. First
   // check that this GPU computes them exactly as the reference code does; if it doesn't,
   // the world lives on the CPU with the reference code instead (slower, same game).
@@ -163,7 +169,7 @@ async function main(): Promise<void> {
   log.info(store instanceof GpuStore ? 'World: in GPU memory' : 'World: on the CPU');
   const meshes = safe ? new ClassicMeshes(device, meshSlotCount(viewRadius)) : new MeshPool(device, meshSlotCount(viewRadius));
   // The land beyond the chunks, out to at least 2 km (1 km past the chunks at long view distances).
-  const far = farOn ? new FarTerrain(device, Math.max(2048, (viewRadius + 1) * CHUNK_SIZE + 1024)) : undefined;
+  const far = farLook !== 'off' ? new FarTerrain(device, Math.max(2048, (viewRadius + 1) * CHUNK_SIZE + 1024)) : undefined;
   if (far) log.info(`Far terrain: out to ${far.extent} blocks, ${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB`);
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
@@ -393,7 +399,7 @@ async function main(): Promise<void> {
     const draws = world.draws((x, z) => inView([x * CHUNK_SIZE, 0, z * CHUNK_SIZE], [(x + 1) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 1) * CHUNK_SIZE]));
     const { cx: wcx, cz: wcz } = world.window, vr = world.viewRadius;
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws, far?.ready ? {
-      vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE,
+      vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE, silhouette: farLook === 'silhouette',
       near: [(wcx - vr) * CHUNK_SIZE, (wcz - vr) * CHUNK_SIZE, (wcx + vr + 1) * CHUNK_SIZE, (wcz + vr + 1) * CHUNK_SIZE],
     } : undefined);
 
@@ -407,7 +413,7 @@ async function main(): Promise<void> {
         ? `world: in GPU memory (${(store.bytes / 2 ** 20).toFixed(1)} MB, meshes ${meshes instanceof MeshPool ? (meshes.usage.used * 4 / 2 ** 20).toFixed(1) : '?'} MB); ` +
           `a tick reads back ${sim.lastBatch * 4} bytes of flags`
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
-      far ? `far terrain: out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
+      far ? `far terrain: ${farLook}, out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
       `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),

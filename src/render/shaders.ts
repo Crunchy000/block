@@ -156,14 +156,15 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 
 /**
  * Far terrain (world/farTerrain.ts): a height field of plain vertex positions, flat shaded
- * from screen-space derivatives. Grass on land (bare dirt on steep slopes), water at the
- * sea's surface, the blocks' sun and fog. Not drawn where real chunks are.
+ * from screen-space derivatives. Either a dark silhouette hazing into the sky, or colours:
+ * grass on land (bare dirt on steep slopes), water at the sea's surface, the blocks' sun
+ * and fog. Not drawn where real chunks are.
  */
 export const farShader = /* wgsl */ `
 ${uniforms}
 struct Far {
   near: vec4f,   // xz min, xz max of the area the real chunks cover
-  sea: vec4f,    // x = y of the sea's surface
+  sea: vec4f,    // x = y of the sea's surface, y = 1 for a dark silhouette instead of colours
 };
 @group(0) @binding(1) var<uniform> far: Far;
 
@@ -191,6 +192,14 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   if (normal.y < 0.0) { normal = -normal; }
   if (all(in.world.xz >= far.near.xy) && all(in.world.xz < far.near.zw)) { discard; }
 
+  let dist = distance(in.world, u.camPos.xyz);
+  if (far.sea.y > 0.5) {
+    // Silhouette: near-black land against the sky, hazier with distance so ridges stand apart.
+    let haze = 0.75 * pow(clamp(dist / u.sky.w, 0.0, 1.0), 0.6);
+    let shade = 0.9 + 0.1 * normal.y;
+    return vec4f(mix(vec3f(0.04, 0.05, 0.08) * shade, u.sky.rgb, haze), 1.0);
+  }
+
   let n = hash2(floor(in.world.xz / 4.0));
   var base: vec3f;
   if (in.world.y <= far.sea.x + 0.01) {
@@ -206,7 +215,6 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   let diffuse = max(dot(normal, sun), 0.0);
   var lit = base * (0.6 + 0.4 * diffuse);
 
-  let dist = distance(in.world, u.camPos.xyz);
   let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, 1.0);
   lit = mix(lit, u.sky.rgb, fog);
   return vec4f(lit, 1.0);
