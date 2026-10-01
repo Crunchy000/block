@@ -2,23 +2,78 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Block</title>
     <style>
-      html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: ui-monospace, Menlo, Consolas, monospace; }
-      canvas { display: block; width: 100vw; height: 100vh; }
-      #hud { position: fixed; top: 8px; left: 8px; color: #fff; font-size: 12px; line-height: 1.5; white-space: pre; text-shadow: 0 1px 2px #000; pointer-events: none; }
-      #crosshair { position: fixed; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; pointer-events: none; }
+      html, body {
+        margin: 0; height: 100%; overflow: hidden; background: #000; font-family: ui-monospace, Menlo, Consolas, monospace;
+        /* A game surface: no pinch-zoom, pull-to-refresh, text selection, long-press menus or tap flashes. */
+        overscroll-behavior: none; touch-action: none; user-select: none; -webkit-user-select: none;
+        -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+      }
+      /* Fixed + inset rather than 100vh, which on phones includes space under the browser's toolbars. */
+      canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+      #hud { position: fixed; z-index: 4; top: calc(8px + env(safe-area-inset-top)); left: calc(8px + env(safe-area-inset-left)); color: #fff; font-size: 12px; line-height: 1.5; white-space: pre; text-shadow: 0 1px 2px #000; pointer-events: none; }
+      #crosshair { position: fixed; z-index: 4; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; pointer-events: none; }
+      body:not(.playing) #crosshair { display: none; }
       #crosshair::before, #crosshair::after { content: ''; position: absolute; background: #fff; mix-blend-mode: difference; }
       #crosshair::before { left: 6px; top: 0; width: 2px; height: 14px; }
       #crosshair::after { top: 6px; left: 0; height: 2px; width: 14px; }
-      #overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; color: #fff; background: rgba(0,0,0,.55); text-align: center; font-size: 14px; line-height: 1.8; cursor: pointer; user-select: none; }
+      #overlay { position: fixed; z-index: 10; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; color: #fff; background: rgba(0,0,0,.55); text-align: center; font-size: 14px; line-height: 1.8; cursor: pointer; }
       #overlay.hidden { display: none; }
       #overlay h1 { font-size: 28px; margin: 0 0 12px; }
       #status { font-size: 18px; margin-bottom: 8px; }
       #error { color: #ff8a80; max-width: 640px; margin: 0 auto 8px; }
       #error:empty { display: none; }
       .help { opacity: .8; }
+      .help.touch { display: none; }
+      @media (pointer: coarse) {
+        .help.touch { display: block; }
+        .help.keys { display: none; }
+      }
+
+      /* Block hotbar (keys 1–4, or tap). */
+      .hotbar { position: fixed; z-index: 3; left: 50%; bottom: calc(10px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; gap: 6px; padding: 5px; background: rgba(0,0,0,.35); border-radius: 10px; }
+      .slot { position: relative; width: 44px; height: 44px; padding: 0; border: 2px solid rgba(255,255,255,.25); border-radius: 7px; background: none; cursor: pointer; }
+      .slot.selected { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+      .swatch { position: absolute; inset: 5px; border-radius: 3px; }
+      .block-dirt .swatch { background: #8c613d; }
+      .block-stone .swatch { background: #808085; }
+      .block-water .swatch { background: #3366cc; }
+      .block-lava .swatch { background: linear-gradient(135deg, #ffb020, #e2400a); }
+      .slot .key { position: absolute; right: 3px; bottom: 1px; font-size: 10px; color: #fff; text-shadow: 0 1px 2px #000; }
+
+      /* Touch controls. */
+      .touch-ui { position: fixed; z-index: 2; inset: 0; pointer-events: none; }
+      .touch-ui[hidden], .stick[hidden] { display: none; }
+      .touch-zone { position: absolute; top: 0; bottom: 0; width: 50%; pointer-events: auto; }
+      .touch-move { left: 0; }
+      .touch-look { right: 0; }
+      .touch-hint { position: absolute; color: rgba(255,255,255,.6); font-size: 13px; text-shadow: 0 1px 2px #000; transition: opacity .4s; }
+      .touch-move .touch-hint { left: calc(32px + env(safe-area-inset-left)); bottom: calc(96px + env(safe-area-inset-bottom)); }
+      .touch-look .touch-hint { left: 50%; top: 45%; transform: translateX(-50%); }
+      .touch-ui.moved .touch-move .touch-hint, .touch-ui.looked .touch-look .touch-hint { opacity: 0; }
+      .stick { position: absolute; width: calc(var(--radius) * 2); height: calc(var(--radius) * 2); margin: calc(var(--radius) * -1) 0 0 calc(var(--radius) * -1); box-sizing: border-box; border-radius: 50%; border: 2px solid rgba(255,255,255,.45); background: rgba(255,255,255,.12); pointer-events: none; }
+      .knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(255,255,255,.6); box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+      .stick.sprint .knob { background: rgba(255,196,64,.85); }
+      .touch-actions { position: absolute; right: calc(16px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom)); display: grid; grid-template: "break fly-up" 64px "place fly-down" 64px / 64px 64px; gap: 12px; }
+      .touch-button { pointer-events: auto; width: 64px; height: 64px; padding: 0; border-radius: 50%; border: 2px solid rgba(255,255,255,.45); background: rgba(0,0,0,.35); color: #fff; font: 600 13px ui-monospace, Menlo, Consolas, monospace; }
+      .touch-button.pressed { background: rgba(255,255,255,.35); }
+      .touch-button.break { grid-area: break; }
+      .touch-button.place { grid-area: place; }
+      .touch-button.fly-up { grid-area: fly-up; font-size: 20px; }
+      .touch-button.fly-down { grid-area: fly-down; font-size: 20px; }
+      .touch-toolbar { position: absolute; top: calc(8px + env(safe-area-inset-top)); right: calc(8px + env(safe-area-inset-right)); display: flex; flex-direction: column; gap: 6px; }
+      .touch-tool { pointer-events: auto; min-width: 84px; padding: 8px 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,.35); background: rgba(0,0,0,.35); color: #fff; font: 12px ui-monospace, Menlo, Consolas, monospace; }
+      .touch-tool[aria-pressed="true"] { background: rgba(80,200,120,.5); }
+
+      /* Portrait phones: lift the buttons above the hotbar and shrink the HUD. */
+      @media (max-aspect-ratio: 1/1) {
+        .touch-actions { bottom: calc(80px + env(safe-area-inset-bottom)); }
+      }
+      @media (max-width: 600px) {
+        #hud { font-size: 10px; max-width: calc(100% - 120px); white-space: pre-wrap; }
+      }
     </style>
   </head>
   <body>
@@ -30,9 +85,12 @@
         <h1>Block</h1>
         <div id="status">Loading…</div>
         <div id="error"></div>
-        <div class="help">WASD move · Space/Shift up/down · Ctrl sprint · Esc release mouse<br />
+        <div class="help keys">WASD move · Space/Shift up/down · Ctrl sprint · Esc release mouse<br />
         Left click break · Right click place · 1 dirt · 2 stone · 3 water · 4 lava<br />
         G toggle chunk/ghost-halo outlines · P pause block updates</div>
+        <div class="help touch">Left side: drag to move (double-tap and hold to sprint)<br />
+        Right side: drag to look · ▲ ▼ fly<br />
+        Break / Place act on the block under the crosshair · tap a block below to choose it</div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

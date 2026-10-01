@@ -10,9 +10,16 @@ npm test           # TF.js logic on the CPU backend (worldgen, block updates, me
 npm run build
 ```
 
-Controls: click anywhere on the start screen to grab the mouse (Esc releases it) · WASD move ·
+**Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD move ·
 Space / Shift up/down · Ctrl sprint · left click break · right click place ·
 `1` dirt `2` stone `3` water `4` lava · `G` chunk / ghost-halo outlines · `P` pause block updates.
+
+**Touch (phones, tablets):** tap the start screen for on-screen controls. The left half of the screen
+is a **dynamic stick**: it appears wherever your thumb lands, is analog (push further to go faster),
+and disappears when you let go; double-tap and hold it to sprint. Drag on the right half to look around.
+Buttons: Break (hold to keep breaking), Place, ▲ / ▼ to fly, a hotbar to pick the block, and
+Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
+
 The bottom layer (y = 0) is unbreakable bedrock.
 
 Every push is built and tested by `.github/workflows/pages.yml`; pushes to the default branch are
@@ -35,7 +42,8 @@ headless browsers where WebGPU canvas presentation isn't available).
 | `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`**; falls back to WebGL, then CPU; pre-compiles kernels |
 | `src/world/` | Chunk store, active area / ghost halo tracking, awake (sleeping) chunks, queued edits |
 | `src/render/` | Face-culling mesher, WGSL shaders, WebGPU renderer (opaque pass, line pass, translucent water pass) |
-| `src/player/` | Fly camera + pointer lock, voxel DDA ray picking |
+| `src/player/` | Fly camera + pointer lock, touch controls (dynamic stick, look drag, buttons), voxel DDA ray picking |
+| `src/ui/hotbar.ts` | Block picker (keys 1–4 or tap) |
 
 ## Chunks and the ghost halo
 

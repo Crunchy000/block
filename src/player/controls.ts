@@ -1,46 +1,70 @@
 import { forward } from '../render/math';
 
-/** Free-flying first-person camera with pointer lock. */
+const MOUSE_LOOK_SPEED = 0.0025; // radians per mouse count
+const MAX_PITCH = 1.55;
+
+/**
+ * Free-flying first-person camera. Played either with mouse + keyboard (pointer
+ * lock) or, on touch screens, through TouchControls, which feeds the touch* fields.
+ */
 export class Controls {
   position: [number, number, number];
   yaw = Math.PI * 0.75;
   pitch = -0.35;
   speed = 12;
+  /** Mouse captured (pointer lock). */
   locked = false;
-  private keys = new Set<string>();
+  /** Playing with on-screen touch controls instead of pointer lock. */
+  touchPlaying = false;
+
+  /** Touch stick, analog: strafe right / forward in [-1, 1]. */
+  touchMove = { right: 0, forward: 0 };
+  touchSprint = false;
+  /** Touch fly buttons: +1 up, -1 down. */
+  touchVertical = 0;
+
   /** Called when the browser refuses pointer lock (e.g. clicking again too soon after Esc). */
   onLockError?: (message: string) => void;
-  /** Mouse buttons pressed since the last poll. */
+  /** Called when play starts or stops (pointer lock or touch mode). */
+  onPlayingChange?: (playing: boolean) => void;
+
+  private keys = new Set<string>();
+  /** Mouse buttons pressed since the last poll (touch break/place buttons push 0 / 2). */
   private clicks: number[] = [];
   private keyPresses: string[] = [];
 
   constructor(private readonly canvas: HTMLCanvasElement, start: [number, number, number]) {
     this.position = start;
-    // Any click starts play: the start screen overlays the canvas, so listen on the document.
-    document.addEventListener('click', () => {
-      if (!this.locked) this.requestLock();
-    });
     document.addEventListener('pointerlockerror', () => this.onLockError?.('the browser refused.'));
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
       if (!this.locked) this.keys.clear();
+      this.onPlayingChange?.(this.playing);
     });
     document.addEventListener('mousemove', (e) => {
-      if (!this.locked) return;
-      this.yaw -= e.movementX * 0.0025;
-      this.pitch = Math.max(-1.55, Math.min(1.55, this.pitch - e.movementY * 0.0025));
+      if (this.locked) this.rotate(e.movementX * MOUSE_LOOK_SPEED, e.movementY * MOUSE_LOOK_SPEED);
     });
     document.addEventListener('mousedown', (e) => {
       if (this.locked) this.clicks.push(e.button);
     });
     window.addEventListener('keydown', (e) => {
-      if (!this.locked) return;
+      if (!this.playing) return;
       this.keys.add(e.code);
       if (!e.repeat) this.keyPresses.push(e.code);
       if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+  }
+
+  get playing(): boolean {
+    return this.locked || this.touchPlaying;
+  }
+
+  /** Start playing from the start screen: touch and pen get on-screen controls, a mouse gets pointer lock. */
+  start(pointerType: string): void {
+    if (pointerType === 'touch' || pointerType === 'pen') this.startTouch();
+    else this.requestLock();
   }
 
   requestLock(): void {
@@ -51,6 +75,36 @@ export class Controls {
     } catch (e) {
       this.onLockError?.(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  startTouch(): void {
+    this.touchPlaying = true;
+    this.onPlayingChange?.(this.playing);
+  }
+
+  stopTouch(): void {
+    this.touchPlaying = false;
+    this.touchMove = { right: 0, forward: 0 };
+    this.touchSprint = false;
+    this.touchVertical = 0;
+    this.keys.clear();
+    this.onPlayingChange?.(this.playing);
+  }
+
+  /** Turn the camera: positive yaw turns right, positive pitch looks down. */
+  rotate(dYaw: number, dPitch: number): void {
+    this.yaw -= dYaw;
+    this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch - dPitch));
+  }
+
+  /** Queue a break (0) or place (2) action, as from a mouse button. */
+  pushClick(button: number): void {
+    this.clicks.push(button);
+  }
+
+  /** Queue a key press (e.g. 'Digit3', 'KeyG') from an on-screen control. */
+  pushKey(code: string): void {
+    this.keyPresses.push(code);
   }
 
   takeClicks(): number[] {
@@ -71,20 +125,23 @@ export class Controls {
 
   update(dt: number): void {
     const k = this.keys;
-    const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw);
-    const rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);
-    let mx = 0, my = 0, mz = 0;
-    if (k.has('KeyW')) { mx += fx; mz += fz; }
-    if (k.has('KeyS')) { mx -= fx; mz -= fz; }
-    if (k.has('KeyD')) { mx += rx; mz += rz; }
-    if (k.has('KeyA')) { mx -= rx; mz -= rz; }
-    if (k.has('Space')) my += 1;
-    if (k.has('ShiftLeft') || k.has('ShiftRight')) my -= 1;
-    const len = Math.hypot(mx, my, mz);
+    // Input in camera space: keys are digital, the touch stick is analog.
+    let right = this.touchMove.right, fwd = this.touchMove.forward, up = this.touchVertical;
+    if (k.has('KeyW')) fwd += 1;
+    if (k.has('KeyS')) fwd -= 1;
+    if (k.has('KeyD')) right += 1;
+    if (k.has('KeyA')) right -= 1;
+    if (k.has('Space')) up += 1;
+    if (k.has('ShiftLeft') || k.has('ShiftRight')) up -= 1;
+    // Full speed in any direction (diagonals aren't faster); a half-pushed stick moves at half speed.
+    const len = Math.hypot(right, fwd, up);
     if (len === 0) return;
-    const s = (this.speed * (k.has('ControlLeft') ? 3 : 1) * dt) / len;
-    this.position[0] += mx * s;
-    this.position[1] += my * s;
-    this.position[2] += mz * s;
+    const sprint = k.has('ControlLeft') || this.touchSprint;
+    const s = (this.speed * (sprint ? 3 : 1) * dt) / Math.max(1, len);
+    const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
+    // forward = (-sin, 0, -cos), right = (cos, 0, -sin)
+    this.position[0] += (-sin * fwd + cos * right) * s;
+    this.position[1] += up * s;
+    this.position[2] += (-cos * fwd - sin * right) * s;
   }
 }

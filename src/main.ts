@@ -1,6 +1,7 @@
 import * as tf from '@tensorflow/tfjs';
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, SOURCE_LEVEL, BLOCK_NAMES, cell } from './constants';
 import { Controls } from './player/controls';
+import { TouchControls } from './player/touchControls';
 import { raycast, type RayHit } from './player/raycast';
 import { fpsView, multiply, perspective } from './render/math';
 import { meshChunk } from './render/mesher';
@@ -8,6 +9,7 @@ import { Renderer } from './render/renderer';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
 import { Simulation } from './tf/simulation';
 import { GEN_BATCH, generateChunks } from './tf/worldgen';
+import { HOTBAR_BLOCKS, createHotbar } from './ui/hotbar';
 import { World } from './world/world';
 
 const TICK_MS = 200;          // block-update rate (5 ticks / second)
@@ -65,10 +67,27 @@ async function main(): Promise<void> {
   if (params.has('yaw')) controls.yaw = Number(params.get('yaw'));
   if (params.has('pitch')) controls.pitch = Number(params.get('pitch'));
   controls.onLockError = (message) => showError(`Couldn't capture the mouse: ${message} Click again to retry.`);
-  document.addEventListener('pointerlockchange', () => {
-    overlay.classList.toggle('hidden', controls.locked);
-    if (controls.locked && lastError.startsWith("Couldn't capture")) showError('');
+  const touchUI = new TouchControls(controls);
+  controls.onPlayingChange = (playing) => {
+    overlay.classList.toggle('hidden', playing);
+    document.body.classList.toggle('playing', playing);
+    touchUI.setVisible(controls.touchPlaying);
+    if (playing && lastError.startsWith("Couldn't capture")) showError('');
+  };
+
+  // The start screen starts play: a tap gets on-screen touch controls, a mouse click captures the mouse.
+  // (Safari's click events don't say which pointer made them, so remember it from pointerdown.)
+  let startPointer = 'mouse';
+  overlay.addEventListener('pointerdown', (e) => { startPointer = e.pointerType; });
+  overlay.addEventListener('click', (e) => {
+    const type = (e as PointerEvent).pointerType || startPointer;
+    if ((type === 'touch' || type === 'pen') && document.fullscreenEnabled && !document.fullscreenElement) {
+      // More room on phones, and no accidental pull-to-refresh. Unsupported on iPhone; that's fine.
+      document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+    }
+    controls.start(type);
   });
+  const touchFirst = matchMedia('(pointer: coarse)').matches;
 
   // Console / automation handle, e.g. block.world.setCell(x, y, z, value).
   Object.assign(window, { block: { world, sim, controls, renderer, tf } });
@@ -80,6 +99,9 @@ async function main(): Promise<void> {
   let selected: Block = Block.Dirt;
   let showChunks = params.has('chunks');
   let paused = false;
+  const hotbar = createHotbar((block) => { selected = block; hotbar.setSelected(block); });
+  hotbar.setSelected(selected);
+  touchUI.setToggle('KeyG', showChunks);
   let lastTick = 0;
   let last = performance.now();
   let fps = 0;
@@ -123,12 +145,13 @@ async function main(): Promise<void> {
 
   const handleInput = (hit: RayHit | null) => {
     for (const key of controls.takeKeyPresses()) {
-      if (key === 'Digit1') selected = Block.Dirt;
-      if (key === 'Digit2') selected = Block.Stone;
-      if (key === 'Digit3') selected = Block.Water;
-      if (key === 'Digit4') selected = Block.Lava;
-      if (key === 'KeyG') showChunks = !showChunks;
-      if (key === 'KeyP') paused = !paused;
+      const slot = /^Digit([1-9])$/.exec(key);
+      if (slot && HOTBAR_BLOCKS[Number(slot[1]) - 1] !== undefined) {
+        selected = HOTBAR_BLOCKS[Number(slot[1]) - 1];
+        hotbar.setSelected(selected);
+      }
+      if (key === 'KeyG') touchUI.setToggle(key, showChunks = !showChunks);
+      if (key === 'KeyP') touchUI.setToggle(key, paused = !paused);
     }
     for (const button of controls.takeClicks()) {
       if (!hit) continue;
@@ -197,7 +220,7 @@ async function main(): Promise<void> {
     pumpMeshing();
 
     const { loaded, total } = world.haloProgress();
-    setStatus(loaded < total ? `Generating world… ${loaded} / ${total} chunks` : 'Click anywhere to play');
+    setStatus(loaded < total ? `Generating world… ${loaded} / ${total} chunks` : `${touchFirst ? 'Tap' : 'Click'} anywhere to play`);
 
     const fogDistance = world.activeRadius * CHUNK_SIZE + 8;
     const proj = perspective((70 * Math.PI) / 180, renderer.aspect, 0.1, fogDistance * 1.5);
