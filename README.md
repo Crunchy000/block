@@ -14,6 +14,9 @@ Controls: click to grab the mouse · WASD move · Space / Shift up/down · Ctrl 
 left click break · right click place · `1` dirt `2` stone `3` water `4` lava ·
 `G` chunk / ghost-halo outlines · `P` pause block updates.
 
+Every push is built and tested by `.github/workflows/pages.yml`; pushes to the default branch are
+published to GitHub Pages at `https://<owner>.github.io/<repo>/`.
+
 URL params: `?radius=N` active radius in chunks (default 3) · `pos=x,y,z` · `yaw=` / `pitch=` (radians) ·
 `chunks` (outlines on) · `offscreen` (render to a texture and copy it to a 2D canvas, for
 headless browsers where WebGPU canvas presentation isn't available).
