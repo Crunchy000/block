@@ -39,7 +39,7 @@ export interface CellStore {
   /** The first solid block or plant along a ray (see player/raycast.ts). */
   raycast(origin: readonly number[], dir: readonly number[], maxDist: number): Promise<RayHit | null>;
   /** Mesh chunks into their mesh slots (see render/mesher.ts for the face records). */
-  mesh(jobs: MeshJob[], target: MeshTarget | undefined): void;
+  mesh(jobs: MeshJob[], target: MeshTarget | undefined): Promise<void>;
 }
 
 /** Generated chunks waiting to be written into slots. */
@@ -61,6 +61,8 @@ export interface MeshJob {
   meshSlot: number;
   cx: number;
   cz: number;
+  /** Still wanted? (Checked before a mesh made asynchronously is kept.) */
+  current?: () => boolean;
 }
 
 /** Slots per chunk in a tick job: the chunk and its eight neighbours. */

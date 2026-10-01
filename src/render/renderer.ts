@@ -4,6 +4,9 @@ import { ClassicMeshes, VERTEX_FLOATS } from './classicMeshes';
 import type { MeshPool } from './meshPool';
 import { blockShader, classicBlockShader, lineShader } from './shaders';
 
+/** Reversed depth (math.ts perspective): float depth keeps precision at any view distance. */
+const DEPTH: GPUTextureFormat = 'depth32float';
+
 export const SKY: [number, number, number] = [0.55, 0.75, 0.95];
 
 export interface RendererOptions {
@@ -34,7 +37,7 @@ export class Renderer {
   private uniformBuffer!: GPUBuffer;
   private layout!: GPUBindGroupLayout;
   private bindGroup?: GPUBindGroup;
-  private bindGroupPool?: MeshPool | ClassicMeshes;
+  private bindGroupKey?: ClassicMeshes | GPUBuffer;
   private opaquePipeline!: GPURenderPipeline;
   private waterPipeline!: GPURenderPipeline;
   private linePipeline!: GPURenderPipeline;
@@ -103,15 +106,15 @@ export class Renderer {
     this.opaquePipeline = device.createRenderPipeline({
       label: 'blocks (opaque)',
       layout: pipelineLayout,
-      vertex: safe ? classicVertex() : { module: blockModule, entryPoint: 'vsOpaque' },
+      vertex: safe ? classicVertex() : { module: blockModule, entryPoint: 'vsFace' },
       fragment: { module: blockModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+      depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' },
     });
     this.waterPipeline = device.createRenderPipeline({
       label: 'blocks (water)',
       layout: pipelineLayout,
-      vertex: safe ? classicVertex() : { module: blockModule, entryPoint: 'vsWater' },
+      vertex: safe ? classicVertex() : { module: blockModule, entryPoint: 'vsFace' },
       fragment: {
         module: blockModule,
         entryPoint: 'fs',
@@ -124,7 +127,7 @@ export class Renderer {
         }],
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less' },
+      depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'greater' },
     });
     const lineModule = device.createShaderModule({ label: 'lines', code: lineShader });
     this.linePipeline = device.createRenderPipeline({
@@ -143,13 +146,15 @@ export class Renderer {
       },
       fragment: { module: lineModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'line-list' },
-      depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'less-equal' },
+      depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'greater-equal' },
     });
   }
 
   private groupFor(meshes: MeshPool | ClassicMeshes): GPUBindGroup {
-    if (this.bindGroup && this.bindGroupPool === meshes) return this.bindGroup;
-    this.bindGroupPool = meshes;
+    // (A MeshPool's face buffer is replaced when it grows.)
+    const key = meshes instanceof ClassicMeshes ? meshes : meshes.faces;
+    if (this.bindGroup && this.bindGroupKey === key) return this.bindGroup;
+    this.bindGroupKey = key;
     const buffers = meshes instanceof ClassicMeshes ? [this.uniformBuffer] : [this.uniformBuffer, meshes.faces, meshes.origins];
     return this.bindGroup = this.device.createBindGroup({
       layout: this.layout,
@@ -165,7 +170,7 @@ export class Renderer {
       this.canvas.width = w;
       this.canvas.height = h;
       this.depth?.destroy();
-      this.depth = this.device.createTexture({ size: [w, h], format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      this.depth = this.device.createTexture({ size: [w, h], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT });
       if (this.options.offscreen) {
         this.colorTarget?.destroy();
         this.colorTarget = this.device.createTexture({
@@ -236,11 +241,11 @@ export class Renderer {
         loadOp: 'clear',
         storeOp: 'store',
       }],
-      depthStencilAttachment: { view: this.depth!.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'store' },
+      depthStencilAttachment: { view: this.depth!.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'store' },
     });
     pass.setBindGroup(0, this.groupFor(pool));
 
-    // Safe mode: ordinary indexed draws of CPU-built meshes; otherwise indirect draws whose sizes the GPU mesher wrote.
+    // Safe mode: indexed draws of CPU-built meshes; otherwise each chunk's run of face records.
     const drawMesh = (d: ChunkDraw, water: boolean) => {
       if (pool instanceof ClassicMeshes) {
         const m = water ? pool.get(d.meshSlot)?.water : pool.get(d.meshSlot)?.opaque;
@@ -249,7 +254,9 @@ export class Renderer {
         pass.setIndexBuffer(m.index, 'uint32');
         pass.drawIndexed(m.count);
       } else {
-        pass.drawIndirect(pool.draws, pool.drawOffset(d.meshSlot) + (water ? 16 : 0));
+        const m = pool.get(d.meshSlot);
+        const run = water ? m?.water : m?.opaque;
+        if (run?.count) pass.draw(run.count * 6, 1, run.start * 6, d.meshSlot);
       }
     };
     pass.setPipeline(this.opaquePipeline);

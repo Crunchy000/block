@@ -118,7 +118,11 @@ async function checkWorlds(device: GPUDevice): Promise<Result> {
     await compare('moved back');
     await ticks(8, 'moved back');
     // Meshes of every active chunk.
-    while (a.world.remesh(pool) > 0); // a few chunks per call
+    for (;;) { // a round of chunks at a time
+      const n = a.world.remesh(pool);
+      await a.world.meshing;
+      if (n === 0) break;
+    }
     let faces = 0;
     for (const c of a.world.activeChunks()) {
       const got = await pool.read(c.meshSlot), want = (b.store as CpuStore).meshChunk(b.world.around(b.world.getChunk(c.cx, c.cz)!));

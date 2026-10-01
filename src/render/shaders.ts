@@ -1,5 +1,5 @@
 import { Block, FALLING_LEVEL, SOURCE_LEVEL } from '../constants';
-import { FACE_CAPACITY, FACE_CORNERS, FACE_NORMALS, FULL_HEIGHT, Face, PLANT_QUADS } from './mesher';
+import { FACE_CORNERS, FACE_NORMALS, FULL_HEIGHT, Face, PLANT_QUADS } from './mesher';
 
 const uniforms = /* wgsl */ `
 struct Uniforms {
@@ -16,10 +16,9 @@ ${uniforms}
 @group(0) @binding(2) var<storage, read> origins: array<vec4<i32>>;
 
 // Faces come straight from GPU memory: each is one record (render/mesher.ts) that the
-// vertex shader turns into a quad, 6 vertices of an indirect draw per face. A mesh slot
-// holds FACE_CAPACITY records, opaque ones from its start and water from its end, and
-// its draws start at vertex slot * FACE_CAPACITY * 6.
-const CAP: u32 = ${FACE_CAPACITY}u;
+// vertex shader turns into a quad, 6 vertices per face. A chunk's faces are a run of the
+// face buffer (render/meshPool.ts), drawn as draw(count * 6, 1, start * 6, meshSlot): the
+// vertex index finds the face, the instance index the chunk's origin.
 const WATER: u32 = ${Block.Water}u;
 const LAVA: u32 = ${Block.Lava}u;
 const FULL_HEIGHT: u32 = ${FULL_HEIGHT}u;
@@ -80,6 +79,8 @@ fn faceVertex(record: u32, slot: u32, vertex: u32) -> VSOut {
     p.y += 0.04 * sin(u.camPos.w * 2.0 + pos.x * 0.7 + pos.z * 0.9) - 0.04;
   }
   o.pos = u.viewProj * vec4f(p, 1.0);
+  // A zero record (type air) is room left in a run: nothing to draw.
+  if (t == 0u) { o.pos = vec4f(0.0, 0.0, 0.0, 1.0); }
   o.world = pos;
   o.normal = normal;
   o.kind = kind;
@@ -87,16 +88,8 @@ fn faceVertex(record: u32, slot: u32, vertex: u32) -> VSOut {
 }
 
 @vertex
-fn vsOpaque(@builtin(vertex_index) v: u32) -> VSOut {
-  let f = v / 6u;
-  return faceVertex(faces[f], f / CAP, v % 6u);
-}
-
-@vertex
-fn vsWater(@builtin(vertex_index) v: u32) -> VSOut {
-  let f = v / 6u;
-  let slot = f / CAP;
-  return faceVertex(faces[slot * CAP + CAP - 1u - (f - slot * CAP)], slot, v % 6u);
+fn vsFace(@builtin(vertex_index) v: u32, @builtin(instance_index) slot: u32) -> VSOut {
+  return faceVertex(faces[v / 6u], slot, v % 6u);
 }
 
 fn hash3(p: vec3f) -> f32 {

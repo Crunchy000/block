@@ -1,14 +1,13 @@
 import * as tf from '@tensorflow/tfjs';
 import {
-  ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, DEFAULT_RATES, SOURCE_LEVEL, BLOCK_NAMES, cell,
+  ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, DEFAULT_RATES, SOURCE_LEVEL, BLOCK_NAMES, cell,
 } from './constants';
 import { log, logError } from './log';
 import { Controls } from './player/controls';
 import { TouchControls } from './player/touchControls';
 import type { RayHit } from './player/raycast';
-import { fpsView, multiply, perspective } from './render/math';
+import { fpsView, frustum, multiply, perspective } from './render/math';
 import { ClassicMeshes } from './render/classicMeshes';
-import { FACE_CAPACITY } from './render/mesher';
 import { MeshPool } from './render/meshPool';
 import { Renderer } from './render/renderer';
 import { checkGpuStore } from './sim/check';
@@ -27,19 +26,21 @@ const PICK_DISTANCE = 8;      // blocks
 const $ = (id: string) => document.getElementById(id)!;
 
 /** View distances offered on the start screen (chunks from the player's chunk). */
-const VIEW_DISTANCES = [3, 5, 8, 12];
+const VIEW_DISTANCES = [3, 8, 16, 32, 64];
 const VIEW_KEY = 'block.viewDistance';
+/** Block updates run this far out at most; beyond it chunks are drawn but frozen. */
+const MAX_SIMULATION_DISTANCE = 8;
 
 /**
- * The furthest view distance this GPU can hold: every drawn chunk has a mesh slot of
- * FACE_CAPACITY faces in one GPU buffer. Safe mode builds meshes on the CPU, which is slow
- * for big areas.
+ * The furthest view distance this GPU can hold: the cells of every loaded chunk (the view
+ * plus a ring) are one GPU buffer of 64 KB a chunk. Safe mode builds meshes on the CPU,
+ * which is slow for big areas.
  */
 function maxViewDistance(device: GPUDevice, safe: boolean): number {
   if (safe) return 8;
   const bytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
-  const slots = Math.floor(bytes / (FACE_CAPACITY * 4));
-  return Math.max(1, Math.floor((Math.sqrt(slots) - 1) / 2));
+  const ring = Math.floor(Math.sqrt(bytes / (CHUNK_VOLUME * 4)));
+  return Math.max(1, Math.floor((ring - 1) / 2) - 1);
 }
 
 /** ?radius=N, else the one picked on the start screen, else 3 on phones and 8 elsewhere; within what the GPU holds. */
@@ -109,10 +110,11 @@ async function main(): Promise<void> {
     logError('Kernel warm-up failed (kernels will compile on first use)', e);
   }
   const { device } = renderer;
-  const activeRadius = viewDistance(params, device, safe);
-  const ghostRadius = activeRadius + 1;
-  log.info(`View distance: ${activeRadius} chunks (${(2 * activeRadius + 1) ** 2} chunks drawn and simulated)`);
-  showViewDistances(activeRadius, maxViewDistance(device, safe));
+  const viewRadius = viewDistance(params, device, safe);
+  const activeRadius = Math.min(viewRadius, MAX_SIMULATION_DISTANCE);
+  const ghostRadius = viewRadius + 1;
+  log.info(`View distance ${viewRadius} (${(2 * viewRadius + 1) ** 2} chunks drawn), simulation distance ${activeRadius}`);
+  showViewDistances(viewRadius, maxViewDistance(device, safe));
   // The world lives in GPU memory, where block updates, meshing and picking run. First
   // check that this GPU computes them exactly as the reference code does; if it doesn't,
   // the world lives on the CPU with the reference code instead (slower, same game).
@@ -127,7 +129,7 @@ async function main(): Promise<void> {
     ? await GpuStore.create(device, ringSize(ghostRadius))
     : new CpuStore(ringSize(ghostRadius));
   log.info(store instanceof GpuStore ? 'World: in GPU memory' : 'World: on the CPU');
-  const meshes = safe ? new ClassicMeshes(device, meshSlotCount(activeRadius)) : new MeshPool(device, meshSlotCount(activeRadius));
+  const meshes = safe ? new ClassicMeshes(device, meshSlotCount(viewRadius)) : new MeshPool(device, meshSlotCount(viewRadius));
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
   let switching = false;
@@ -148,7 +150,7 @@ async function main(): Promise<void> {
       .finally(() => { switching = false; });
   };
 
-  const world = new World(store, activeRadius, ghostRadius);
+  const world = new World(store, activeRadius, ghostRadius, viewRadius);
   // ?spread= / ?grow= tune the per-tick chances of grass spreading (default 1/16; 0 stops it)
   // and wheat growing a stage (default 1/40, and 1/12 next to water; ?grow= sets both).
   const chance = (name: string) => Math.min(1, Math.max(0, Number(params.get(name))));
@@ -293,7 +295,7 @@ async function main(): Promise<void> {
     if (showChunks) {
       for (const c of world.chunks.values()) {
         const d = world.distance(c.cx, c.cz);
-        if (d > world.ghostRadius) continue;
+        if (d > world.activeRadius + 1) continue; // the simulated area and the ring around it
         const col = c.state === 'active' ? [0.2, 1, 0.3] : [1, 0.55, 0.1];
         const x0 = c.cx * CHUNK_SIZE + 0.05, z0 = c.cz * CHUNK_SIZE + 0.05;
         box(x0, 0.05, z0, x0 + CHUNK_SIZE - 0.1, CHUNK_HEIGHT - 0.05, z0 + CHUNK_SIZE - 0.1, col);
@@ -343,21 +345,27 @@ async function main(): Promise<void> {
       worldReady = true;
       log.info(`World ready: ${total} chunks, ${((performance.now() - startedAt) / 1000).toFixed(1)} s after start`);
     }
-    setStatus(loaded < total ? `Generating world… ${loaded} / ${total} chunks` : `${touchFirst ? 'Tap' : 'Click'} anywhere to play`, false);
+    // Playable once the area around the player is in; the distance keeps loading.
+    const play = `${touchFirst ? 'Tap' : 'Click'} anywhere to play`;
+    setStatus(!world.simReady() ? `Generating world… ${loaded} / ${total} chunks` : loaded < total ? `${play} (loading ${loaded} / ${total} chunks)` : play, false);
 
-    const fogDistance = world.activeRadius * CHUNK_SIZE + 8;
-    const proj = perspective((70 * Math.PI) / 180, renderer.aspect, 0.1, fogDistance * 1.5);
+    const fogDistance = world.viewRadius * CHUNK_SIZE + 8;
+    const proj = perspective((70 * Math.PI) / 180, renderer.aspect, 0.1);
     const viewProj = multiply(proj, fpsView(eye, controls.yaw, controls.pitch));
-    renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, world.draws());
+    // Only chunks the camera can see.
+    const inView = frustum(viewProj);
+    const draws = world.draws((x, z) => inView([x * CHUNK_SIZE, 0, z * CHUNK_SIZE], [(x + 1) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 1) * CHUNK_SIZE]));
+    renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws);
 
-    const saved = world.savedCount();
+    const saved = world.savedCount(), counts = world.counts();
     hud.textContent = [
       `fps ${fps.toFixed(0)}   gpu: ${gpuName}   world generation: TF.js on ${tfBackend}`,
       `pos ${px.toFixed(1)} ${py.toFixed(1)} ${pz.toFixed(1)}   chunk ${world.window.cx},${world.window.cz}`,
-      `chunks: ${world.activeChunks().length} active (${world.awakeCount()} awake, ${sim.growingChunks} growing plants), ` +
-        `${world.ghostChunks().length} ghost (halo)${saved ? `, ${saved} changed ones saved` : ''}`,
+      `chunks: ${counts.inView} in view (${draws.length} drawn), ${counts.active} simulated (${world.awakeCount()} awake, ` +
+        `${sim.growingChunks} growing plants)${saved ? `, ${saved} changed ones saved` : ''}`,
       store instanceof GpuStore
-        ? `world: in GPU memory (${(store.bytes / 2 ** 20).toFixed(1)} MB); a tick reads back ${sim.lastBatch * 4} bytes of flags`
+        ? `world: in GPU memory (${(store.bytes / 2 ** 20).toFixed(1)} MB, meshes ${meshes instanceof MeshPool ? (meshes.usage.used * 4 / 2 ** 20).toFixed(1) : '?'} MB); ` +
+          `a tick reads back ${sim.lastBatch * 4} bytes of flags`
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       `block updates: ${blockUpdateStatus()}`,
       `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,

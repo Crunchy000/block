@@ -37,7 +37,7 @@ export class Simulation {
   /** Returns true if a tick ran (false when not ready, busy, or nothing is awake). */
   async tick(): Promise<boolean> {
     const world = this.world;
-    if (this.busy || !world.haloReady()) return false;
+    if (this.busy || !world.simReady()) return false;
     const awake = world.takeAwake();
     this.asleep = awake.length === 0;
     if (this.asleep) return false;

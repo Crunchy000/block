@@ -17,8 +17,10 @@ export class Chunk {
   /** Bumped whenever its cells (or the neighbouring cells its mesh depends on) change; remeshed when it differs from meshedVersion. */
   version = 0;
   meshedVersion = -1;
-  /** Where its mesh goes while it's active (-1 otherwise). */
+  /** Where its mesh goes while it's in view (-1 otherwise). */
   meshSlot = -1;
+  /** Its mesh is in its mesh slot (drawn while in view). */
+  meshReady = false;
   /** Edited or simulated since generation: saved when it leaves the halo, restored when it comes back. */
   modified = false;
 

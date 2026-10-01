@@ -1,14 +1,32 @@
 export type Mat4 = Float32Array;
 
-/** Column-major perspective matrix with WebGPU's [0, 1] clip-space depth. */
-export function perspective(fovY: number, aspect: number, near: number, far: number): Mat4 {
-  const f = 1 / Math.tan(fovY / 2), nf = 1 / (near - far);
+/**
+ * Column-major perspective matrix with WebGPU's [0, 1] clip-space depth, reversed and with
+ * no far plane: depth = near / distance, 1 at the near plane falling towards 0 far away.
+ * With a float depth buffer that keeps precision out to any view distance (draw with depth
+ * compare 'greater', clear to 0).
+ */
+export function perspective(fovY: number, aspect: number, near: number): Mat4 {
+  const f = 1 / Math.tan(fovY / 2);
   return new Float32Array([
     f / aspect, 0, 0, 0,
     0, f, 0, 0,
-    0, 0, far * nf, -1,
-    0, 0, far * near * nf, 0,
+    0, 0, 0, -1,
+    0, 0, near, 0,
   ]);
+}
+
+/**
+ * A test for boxes against the sides of the view (left, right, top and bottom planes of
+ * a view-projection matrix): false when a box is wholly outside.
+ */
+export function frustum(viewProj: Mat4): (min: readonly number[], max: readonly number[]) => boolean {
+  const row = (i: number) => [viewProj[i], viewProj[4 + i], viewProj[8 + i], viewProj[12 + i]];
+  const r0 = row(0), r1 = row(1), r3 = row(3);
+  const planes = [[1, r0], [-1, r0], [1, r1], [-1, r1]].map(([s, r]) =>
+    (r3 as number[]).map((v, k) => v + (s as number) * (r as number[])[k]));
+  return (min, max) => planes.every((p) =>
+    p[0] * (p[0] > 0 ? max[0] : min[0]) + p[1] * (p[1] > 0 ? max[1] : min[1]) + p[2] * (p[2] > 0 ? max[2] : min[2]) + p[3] >= 0);
 }
 
 /** View matrix for a first-person camera at `eye` with yaw (around Y) and pitch. */

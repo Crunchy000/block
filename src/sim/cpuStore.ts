@@ -99,9 +99,10 @@ export class CpuStore implements CellStore {
     return meshFaces((x, y, z) => cellNear(this.cells, around, x, y, z));
   }
 
-  mesh(jobs: MeshJob[], pool: MeshTarget | undefined): void {
-    if (!pool) return; // nothing to draw with (Node tests)
-    for (const job of jobs) pool.upload(job.meshSlot, job.cx, job.cz, this.meshChunk(job.around));
+  mesh(jobs: MeshJob[], pool: MeshTarget | undefined): Promise<void> {
+    // (Without a target, nothing to draw with: Node tests.)
+    if (pool) for (const job of jobs) pool.upload(job.meshSlot, job.cx, job.cz, this.meshChunk(job.around));
+    return Promise.resolve();
   }
 }
 

@@ -203,8 +203,8 @@ class Readbacks {
  * halo (to be restored when it comes back).
  */
 export class GpuStore implements CellStore {
-  /** A few chunks per frame: meshing everything at once is one long GPU job, too much for some phones. */
-  readonly meshBudget = 8;
+  /** Chunks per meshing round (two GPU passes with a read back of 8 bytes a chunk between). */
+  readonly meshBudget = 32;
   /** Every slot's cells (i32), CHUNK_VOLUME per slot in chunk layout. */
   readonly cells: GPUBuffer;
   private readonly slotInfo: GPUBuffer;
@@ -369,10 +369,10 @@ export class GpuStore implements CellStore {
     return r[0] ? { block: [r[1], r[2], r[3]], before: [r[4], r[5], r[6]] } : null;
   }
 
-  mesh(jobs: MeshJob[], target: MeshTarget | undefined): void {
-    if (!target) return;
-    if (!(target instanceof MeshPool)) throw new Error('the GPU world meshes into GPU mesh slots (a MeshPool)');
-    this.mesher.mesh(this.cells, jobs, target);
+  mesh(jobs: MeshJob[], target: MeshTarget | undefined): Promise<void> {
+    if (!target) return Promise.resolve();
+    if (!(target instanceof MeshPool)) throw new Error('the GPU world meshes into a MeshPool');
+    return this.mesher.mesh(this.cells, jobs, target);
   }
 
   destroy(): void {

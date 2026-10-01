@@ -1,16 +1,17 @@
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, SOURCE_LEVEL } from '../constants';
 import { AROUND, type MeshJob } from '../sim/store';
-import { FACE_CAPACITY, FULL_HEIGHT, Face } from './mesher';
-import type { MeshPool } from './meshPool';
+import { FULL_HEIGHT, Face } from './mesher';
+import type { ChunkMesh, MeshPool } from './meshPool';
 
-/** u32s per mesh job: the AROUND slots around the chunk, then its mesh slot. */
-const JOB_STRIDE = AROUND + 1;
+/** u32s per mesh job: the AROUND slots around the chunk, the starts of its opaque and water runs, and their sizes. */
+const JOB_STRIDE = AROUND + 4;
 const WORKGROUP = 64;
 
-// The mesher of render/mesher.ts as a compute shader: one invocation per cell finds the
-// cell's visible faces and reserves room for them in the chunk's mesh slot with one
-// atomic add on the slot's indirect draw (the draw's vertex count is the slot's face
-// count). Faces land in no particular order; the GPU tests compare them with the CPU
+// The mesher of render/mesher.ts as a compute shader, in two passes over the same per-cell
+// face finding. countFaces adds up each chunk's opaque and water faces; the CPU reads those
+// counts back (8 bytes a chunk) and reserves exactly that much room in the mesh pool;
+// writeFaces then puts every face in its chunk's run, its place in the run taken with an
+// atomic add. Faces land in no particular order; the GPU tests compare them with the CPU
 // mesher's as sets. (No workgroup memory or barriers: measured faster without.)
 const MESH_WGSL = /* wgsl */ `
 const AIR: i32 = ${Block.Air};
@@ -23,18 +24,17 @@ const WHEAT: i32 = ${Block.Wheat};
 const S: i32 = ${CHUNK_SIZE};
 const H: i32 = ${CHUNK_HEIGHT};
 const VOLUME: i32 = ${CHUNK_VOLUME};
-const CAP: u32 = ${FACE_CAPACITY}u;
 const FULL_HEIGHT: i32 = ${FULL_HEIGHT};
 const SOURCE: i32 = ${SOURCE_LEVEL};
 const PLANT_FIRST: i32 = ${Face.PlantA};
 const PLANT_LAST: i32 = ${Face.PlantBBack};
 
 @group(0) @binding(0) var<storage, read> cells: array<i32>;
-// Per chunk: its ${AROUND} slots around (3x3, row by row), then its mesh slot.
+// Per chunk: its ${AROUND} slots around (3x3, row by row), the starts of its opaque and water runs, their sizes.
 @group(0) @binding(1) var<storage, read> jobs: array<u32>;
 @group(0) @binding(2) var<storage, read_write> faces: array<u32>;
-// Per mesh slot: drawIndirect arguments for its opaque faces, then its water faces.
-@group(0) @binding(3) var<storage, read_write> draws: array<atomic<u32>>;
+// Per chunk: opaque and water face counts (countFaces), or how much of each run is filled (writeFaces).
+@group(0) @binding(3) var<storage, read_write> counts: array<atomic<u32>>;
 
 // Where this chunk's job starts in jobs.
 var<private> job: u32;
@@ -57,21 +57,22 @@ fn faceRecord(x: i32, y: i32, z: i32, face: i32, t: i32, aux: i32) -> u32 {
   return u32(x | (z << 4u) | (y << 8u) | (face << 14u) | (t << 18u) | (aux << 21u));
 }
 
-@compute @workgroup_size(${WORKGROUP})
-fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u32) {
+var<private> mine: array<u32, 6>;
+var<private> n: u32;
+var<private> water: bool;
+
+// The faces of one cell of chunk wg.y, into mine[0..n].
+fn cellFaces(wg: vec3u, li: u32) {
   job = wg.y * ${JOB_STRIDE}u;
-  let slot = jobs[job + ${AROUND}u];
   let i = i32(wg.x * ${WORKGROUP}u + li);
   let x = i & 15;
   let z = (i >> 4u) & 15;
   let y = i >> 8u;
 
-  // This cell's faces.
-  var mine: array<u32, 6>;
-  var n = 0u;
+  n = 0u;
   let c = cellAt(y, z, x);
   let t = typeOf(c);
-  let water = t == WATER;
+  water = t == WATER;
   if (t == WHEAT) {
     let stage = min(c >> 3u, 15);
     for (var f = PLANT_FIRST; f <= PLANT_LAST; f++) {
@@ -102,15 +103,26 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u
     }
   }
 
+}
+
+@compute @workgroup_size(${WORKGROUP})
+fn countFaces(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u32) {
+  cellFaces(wg, li);
+  if (n > 0u) { atomicAdd(&counts[wg.y * 2u + select(0u, 1u, water)], n); }
+}
+
+@compute @workgroup_size(${WORKGROUP})
+fn writeFaces(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u32) {
+  cellFaces(wg, li);
   if (n == 0u) { return; }
-  // Make room: opaque faces fill the slot from its start, water from its end.
-  let base = slot * CAP;
-  if (water) {
-    let start = atomicAdd(&draws[slot * 8u + 4u], n * 6u) / 6u;
-    for (var k = 0u; k < n; k++) { faces[base + CAP - 1u - (start + k)] = mine[k]; }
-  } else {
-    let start = atomicAdd(&draws[slot * 8u], n * 6u) / 6u;
-    for (var k = 0u; k < n; k++) { faces[base + start + k] = mine[k]; }
+  let w = select(0u, 1u, water);
+  // A block update between the two passes can add faces: never write past the run (the
+  // chunk changed, so it's meshed again anyway).
+  let at = atomicAdd(&counts[wg.y * 2u + w], n);
+  let size = jobs[job + ${AROUND}u + 2u + w];
+  let start = jobs[job + ${AROUND}u + w];
+  for (var k = 0u; k < n; k++) {
+    if (at + k < size) { faces[start + at + k] = mine[k]; }
   }
 }
 `;
@@ -118,44 +130,101 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_index) li: u
 /** Meshes chunks on the GPU, from the cells in a GpuStore into a MeshPool. */
 export class GpuMesher {
   private jobs?: GPUBuffer;
+  private counts?: GPUBuffer;
   private group?: GPUBindGroup;
   private groupFor?: { cells: GPUBuffer; faces: GPUBuffer; jobs: GPUBuffer };
 
-  private constructor(private readonly device: GPUDevice, private readonly pipeline: GPUComputePipeline) {}
+  private constructor(
+    private readonly device: GPUDevice, private readonly layout: GPUBindGroupLayout,
+    private readonly count: GPUComputePipeline, private readonly write: GPUComputePipeline,
+  ) {}
 
   static async create(device: GPUDevice): Promise<GpuMesher> {
     const module = device.createShaderModule({ label: 'meshing', code: MESH_WGSL });
-    return new GpuMesher(device, await device.createComputePipelineAsync({ label: 'meshing', layout: 'auto', compute: { module, entryPoint: 'main' } }));
+    const storage = (type: GPUBufferBindingType) => ({ visibility: GPUShaderStage.COMPUTE, buffer: { type } });
+    const layout = device.createBindGroupLayout({
+      label: 'meshing',
+      entries: [storage('read-only-storage'), storage('read-only-storage'), storage('storage'), storage('storage')]
+        .map((e, binding) => ({ binding, ...e })),
+    });
+    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
+    const pipeline = (entryPoint: string) => device.createComputePipelineAsync({
+      label: `meshing (${entryPoint})`, layout: pipelineLayout, compute: { module, entryPoint },
+    });
+    const [count, write] = await Promise.all([pipeline('countFaces'), pipeline('writeFaces')]);
+    return new GpuMesher(device, layout, count, write);
   }
 
-  mesh(cells: GPUBuffer, jobs: MeshJob[], pool: MeshPool): void {
+  /**
+   * Mesh chunks into the pool: count their faces, read the counts back, reserve room, write
+   * the faces, then make them the chunks' meshes. Jobs whose `current` says no once the
+   * counts are back (the chunk left meanwhile) are dropped.
+   */
+  async mesh(cells: GPUBuffer, jobs: MeshJob[], pool: MeshPool): Promise<void> {
     if (jobs.length === 0) return;
-    const data = new Uint32Array(jobs.length * JOB_STRIDE);
-    jobs.forEach((job, k) => {
-      data.set(job.around, k * JOB_STRIDE);
-      data[k * JOB_STRIDE + AROUND] = job.meshSlot;
-      pool.reset(job.meshSlot, job.cx, job.cz);
-    });
     const { device } = this;
+    const data = new Uint32Array(jobs.length * JOB_STRIDE);
+    jobs.forEach((job, k) => data.set(job.around, k * JOB_STRIDE));
     if (!this.jobs || this.jobs.size < data.byteLength) {
       this.jobs?.destroy();
-      this.jobs = device.createBuffer({ size: Math.max(data.byteLength, 4096), usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      this.counts?.destroy();
+      const n = Math.max(jobs.length, 64);
+      this.jobs = device.createBuffer({ label: 'mesh jobs', size: n * JOB_STRIDE * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      this.counts = device.createBuffer({ label: 'mesh counts', size: n * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
     }
-    device.queue.writeBuffer(this.jobs, 0, data);
+    const run = (pipeline: GPUComputePipeline, readCounts: boolean) => {
+      device.queue.writeBuffer(this.jobs!, 0, data);
+      const encoder = device.createCommandEncoder();
+      encoder.clearBuffer(this.counts!, 0, jobs.length * 8);
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, this.bindGroup(cells, pool));
+      pass.dispatchWorkgroups(CHUNK_VOLUME / WORKGROUP, jobs.length);
+      pass.end();
+      let readback: GPUBuffer | undefined;
+      if (readCounts) {
+        readback = device.createBuffer({ size: jobs.length * 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+        encoder.copyBufferToBuffer(this.counts!, 0, readback, 0, jobs.length * 8);
+      }
+      device.queue.submit([encoder.finish()]);
+      return readback;
+    };
+
+    const readback = run(this.count, true)!;
+    let counts: Uint32Array;
+    try {
+      await readback.mapAsync(GPUMapMode.READ);
+      counts = new Uint32Array(readback.getMappedRange().slice(0));
+    } finally {
+      readback.destroy();
+    }
+    const meshes: Array<ChunkMesh | undefined> = jobs.map((job, k) => {
+      if (job.current && !job.current()) return undefined;
+      const mesh = pool.reserve(counts[k * 2], counts[k * 2 + 1]);
+      if (!mesh) throw new Error(`no room on the GPU for more chunk meshes (${pool.usage.used} faces in use)`);
+      data.set([mesh.opaque.start, mesh.water.start, mesh.opaque.count, mesh.water.count], k * JOB_STRIDE + AROUND);
+      return mesh;
+    });
+    // Runs start zeroed (a zero record draws nothing), in case fewer faces arrive than were counted.
+    const clear = device.createCommandEncoder();
+    for (const m of meshes) {
+      for (const r of m ? [m.opaque, m.water] : []) if (r.count) clear.clearBuffer(pool.faces, r.start * 4, r.count * 4);
+    }
+    device.queue.submit([clear.finish()]);
+    // Reserving may have grown (replaced) the face buffer: bind the current one.
+    run(this.write, false);
+    jobs.forEach((job, k) => { if (meshes[k]) pool.commit(job.meshSlot, job.cx, job.cz, meshes[k]!); });
+  }
+
+  private bindGroup(cells: GPUBuffer, pool: MeshPool): GPUBindGroup {
     const g = this.groupFor;
     if (!this.group || g?.cells !== cells || g.faces !== pool.faces || g.jobs !== this.jobs) {
-      this.groupFor = { cells, faces: pool.faces, jobs: this.jobs };
-      this.group = device.createBindGroup({
-        layout: this.pipeline.getBindGroupLayout(0),
-        entries: [cells, this.jobs, pool.faces, pool.draws].map((buffer, binding) => ({ binding, resource: { buffer } })),
+      this.groupFor = { cells, faces: pool.faces, jobs: this.jobs! };
+      this.group = this.device.createBindGroup({
+        layout: this.layout,
+        entries: [cells, this.jobs!, pool.faces, this.counts!].map((buffer, binding) => ({ binding, resource: { buffer } })),
       });
     }
-    const encoder = device.createCommandEncoder();
-    const pass = encoder.beginComputePass();
-    pass.setPipeline(this.pipeline);
-    pass.setBindGroup(0, this.group);
-    pass.dispatchWorkgroups(CHUNK_VOLUME / WORKGROUP, jobs.length);
-    pass.end();
-    device.queue.submit([encoder.finish()]);
+    return this.group;
   }
 }

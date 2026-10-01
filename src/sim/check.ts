@@ -1,6 +1,5 @@
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, blockIndex, cell } from '../constants';
 import { MeshPool } from '../render/meshPool';
-import { FACE_CAPACITY } from '../render/mesher';
 import { mulberry32, randomCells } from '../tf/kernelCheck';
 import { borderOf } from '../world/world';
 import { CpuStore } from './cpuStore';
@@ -99,13 +98,9 @@ export async function checkGpuStore(device: GPUDevice, seed = 1, ticks = 2, rays
       cpu.writeChunk(slot, cells);
     }
     const meshed = [0, 4, 8].map((slot, meshSlot) => ({ around: around(slot), meshSlot, cx: slot % RING, cz: Math.floor(slot / RING) }));
-    gpu.mesh(meshed, pool);
+    await gpu.mesh(meshed, pool);
     for (const job of meshed) {
       const got = await pool.read(job.meshSlot), want = cpu.meshChunk(job.around);
-      const first = job.meshSlot * FACE_CAPACITY * 6;
-      if (got.draws.join() !== [want.opaque.length * 6, 1, first, 0, want.water.length * 6, 1, first, 0].join()) {
-        fail(`mesh of chunk ${job.cx},${job.cz}: draws ${got.draws.join()}, expected ${want.opaque.length} opaque and ${want.water.length} water faces`);
-      }
       for (const kind of ['opaque', 'water'] as const) {
         const a = [...got[kind]].sort(), b = [...want[kind]].sort();
         facesCompared += b.length;
