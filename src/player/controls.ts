@@ -29,6 +29,8 @@ export class Controls {
   /** Touch stick, analog: strafe right / forward in [-1, 1]. */
   touchMove = { right: 0, forward: 0 };
   touchSprint = false;
+  /** Touch Break button held. */
+  touchDig = false;
   /** Touch fly buttons: +1 up, -1 down. */
   touchVertical = 0;
 
@@ -38,6 +40,8 @@ export class Controls {
   onPlayingChange?: (playing: boolean) => void;
 
   private keys = new Set<string>();
+  /** Left mouse button held (with the mouse captured). */
+  private mouseDig = false;
   /** Running from a double-tapped W (until W is let go), as in Minecraft: Ctrl+W closes the tab in browsers. */
   private runLatch = false;
   private lastWUp = -Infinity;
@@ -51,14 +55,22 @@ export class Controls {
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas;
-      if (!this.locked) this.keys.clear();
+      if (!this.locked) {
+        this.keys.clear();
+        this.mouseDig = false;
+      }
       this.onPlayingChange?.(this.playing);
     });
     document.addEventListener('mousemove', (e) => {
       if (this.locked) this.rotate(e.movementX * MOUSE_LOOK_SPEED, e.movementY * MOUSE_LOOK_SPEED);
     });
     document.addEventListener('mousedown', (e) => {
-      if (this.locked) this.clicks.push(e.button);
+      if (!this.locked) return;
+      if (e.button === 0) this.mouseDig = true;
+      else this.clicks.push(e.button);
+    });
+    document.addEventListener('mouseup', (e) => {
+      if (e.button === 0) this.mouseDig = false;
     });
     window.addEventListener('keydown', (e) => {
       if (!this.playing) return;
@@ -74,6 +86,11 @@ export class Controls {
         this.lastWUp = e.timeStamp;
       }
     });
+  }
+
+  /** Digging: the left mouse button or the touch Break button held down. */
+  get digging(): boolean {
+    return this.mouseDig || this.touchDig;
   }
 
   get playing(): boolean {
@@ -105,6 +122,7 @@ export class Controls {
     this.touchPlaying = false;
     this.touchMove = { right: 0, forward: 0 };
     this.touchSprint = false;
+    this.touchDig = false;
     this.touchVertical = 0;
     this.keys.clear();
     this.onPlayingChange?.(this.playing);
@@ -116,7 +134,7 @@ export class Controls {
     this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch - dPitch));
   }
 
-  /** Queue a break (0) or place (2) action, as from a mouse button. */
+  /** Queue a place (2) action, as from the right mouse button. */
   pushClick(button: number): void {
     this.clicks.push(button);
   }

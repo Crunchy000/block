@@ -4,6 +4,7 @@ import {
 } from './constants';
 import { log, logError } from './log';
 import { Controls } from './player/controls';
+import { Digging } from './player/digging';
 import { EYE_HEIGHT, Nearby, overlaps } from './player/physics';
 import { TouchControls } from './player/touchControls';
 import type { RayHit } from './player/raycast';
@@ -15,9 +16,10 @@ import { checkGpuStore } from './sim/check';
 import { CpuStore } from './sim/cpuStore';
 import { GpuStore } from './sim/gpuStore';
 import { Simulation } from './sim/simulation';
-import { ringSize, type CellStore } from './sim/store';
+import { NOT_LOADED, ringSize, type CellStore } from './sim/store';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
 import { HOTBAR_BLOCKS, createHotbar } from './ui/hotbar';
+import { Drops } from './world/drops';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
 import { generateMissing } from './world/loader';
 import { World, meshSlotCount } from './world/world';
@@ -270,13 +272,13 @@ async function main(): Promise<void> {
   const DIAMONDS_KEY = 'block.diamonds';
   let diamonds = 0;
   try { diamonds = Math.max(0, Number(localStorage.getItem(DIAMONDS_KEY)) || 0); } catch { /* storage blocked */ }
-  const setDiamonds = (n: number, mined: boolean) => {
+  const setDiamonds = (n: number, picked: boolean) => {
     diamonds = n;
-    hotbar.setCount(Block.Diamond, n);
-    if (mined) hotbar.flash(Block.Diamond);
+    hotbar.setDiamonds(n);
+    if (picked) hotbar.flashDiamonds();
     try { localStorage.setItem(DIAMONDS_KEY, String(n)); } catch { /* storage blocked */ }
   };
-  hotbar.setCount(Block.Diamond, diamonds);
+  hotbar.setDiamonds(diamonds);
   let lastTick = 0;
   let last = performance.now();
   let fps = 0;
@@ -348,23 +350,11 @@ async function main(): Promise<void> {
     for (const button of controls.takeClicks()) {
       if (!hit) continue;
       // y = 0 is bedrock: it holds up fluids at the bottom of the world.
-      if (button === 0 && hit.block[1] > 0) {
-        world.setCell(...hit.block, cell(Block.Air));
-        nearby?.set(...hit.block, Block.Air);
-        if (hit.type === Block.Diamond) setDiamonds(diamonds + 1, true);
-      } else if (button === 2) {
+      if (button === 2) {
         // Not a solid block where the player stands.
         const [bx, by, bz] = hit.before, p = controls.position;
         const inside = overlaps([p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => (x === bx && y === by && z === bz ? selected : Block.Air));
         if (!controls.flying && inside) continue;
-        // Diamond ore is placed from the diamonds you've mined.
-        if (selected === Block.Diamond) {
-          if (diamonds === 0) {
-            hotbar.flash(Block.Diamond);
-            continue;
-          }
-          setDiamonds(diamonds - 1, false);
-        }
         const level = selected === Block.Water || selected === Block.Lava ? SOURCE_LEVEL : 0;
         world.setCell(...hit.before, cell(selected, level));
         nearby?.set(...hit.before, selected);
@@ -372,6 +362,29 @@ async function main(): Promise<void> {
       edits++;
       hit = null;
     }
+  };
+
+  // Digging: hold to break the block under the crosshair, harder blocks taking longer
+  // (player/digging.ts). Diamond ore drops a diamond to pick up, as if mined with a pickaxe.
+  const digging = new Digging();
+  const drops = new Drops();
+  const digRing = $('dig');
+  const dig = (dt: number) => {
+    // y = 0 is bedrock: it holds up fluids at the bottom of the world.
+    const target = hit && hit.block[1] > 0 ? hit : null;
+    if (digging.step(dt, controls.digging, target?.block, target?.type) && target) {
+      world.setCell(...target.block, cell(Block.Air));
+      nearby?.set(...target.block, Block.Air);
+      if (target.type === Block.Diamond) drops.spawn(...target.block);
+      edits++;
+      hit = null;
+    }
+    digRing.classList.toggle('on', digging.progress > 0);
+    digRing.style.setProperty('--p', digging.progress.toFixed(3));
+    // Pick up what's lying around (where the blocks are known).
+    const p = controls.position;
+    const got = drops.update(dt, [p[0], p[1] - 0.7, p[2]], nearby ? (x, y, z) => nearby!.at(x, y, z) : () => NOT_LOADED);
+    if (got > 0) setDiamonds(diamonds + got, true);
   };
 
   const buildLines = (hit: RayHit | null): Float32Array<ArrayBuffer> => {
@@ -394,6 +407,7 @@ async function main(): Promise<void> {
         box(x0, 0.05, z0, x0 + CHUNK_SIZE - 0.1, CHUNK_HEIGHT - 0.05, z0 + CHUNK_SIZE - 0.1, col);
       }
     }
+    out.push(...drops.lines(performance.now() / 1000));
     return new Float32Array(out);
   };
 
@@ -424,6 +438,7 @@ async function main(): Promise<void> {
     const eye = controls.position;
     handleInput();
     pick();
+    dig(dt);
 
     if (!paused && now - lastTick >= TICK_MS && !sim.busy) {
       lastTick = now;

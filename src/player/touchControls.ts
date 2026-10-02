@@ -5,7 +5,6 @@ const STICK_RADIUS = 56;   // CSS px the knob can travel from where the thumb la
 const DEAD_ZONE = 0.12;    // fraction of the radius that reads as no movement
 const LOOK_SPEED = 0.006;  // radians per CSS px dragged on the look side
 const SPRINT_TAP_MS = 300; // touching the stick again this soon after letting go sprints
-const BREAK_REPEAT_MS = 250;
 
 /**
  * On-screen controls for touch screens:
@@ -48,10 +47,7 @@ export class TouchControls {
 
     const actions = el('div', 'touch-actions');
     actions.append(
-      this.holdButton('Break', 'break', 'Break block', () => {
-        this.controls.pushClick(0);
-        return window.setInterval(() => this.controls.pushClick(0), BREAK_REPEAT_MS);
-      }),
+      this.holdButton('Break', 'break', 'Dig (hold)', () => { this.controls.touchDig = true; }, () => { this.controls.touchDig = false; }),
       this.holdButton('Place', 'place', 'Place block', () => this.controls.pushClick(2)),
       this.holdButton('▲', 'fly-up', 'Jump, swim or fly up', () => this.setFly('up', true), () => this.setFly('up', false)),
       this.holdButton('▼', 'fly-down', 'Fly down (when flying)', () => this.setFly('down', true), () => this.setFly('down', false)),
