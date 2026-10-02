@@ -466,10 +466,7 @@ async function main(): Promise<void> {
     // Pick up what's lying around (where the blocks are known).
     const p = controls.position;
     const got = drops.update(dt, [p[0], p[1] - 0.7, p[2]], nearby ? (x, y, z) => nearby!.at(x, y, z) : () => NOT_LOADED);
-    if (got > 0) {
-      setDiamonds(diamonds + got, true);
-      sounds.pickup();
-    }
+    if (got > 0) setDiamonds(diamonds + got, true);
   };
   let digTick = 0;
 
