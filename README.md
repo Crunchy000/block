@@ -19,6 +19,14 @@ Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (throu
 Ctrl to fly faster) · left click break · right click place ·
 `1`–`8` pastel concrete colours · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
+**Pigs:** up to 6 pigs wander the grass around you: they spawn on grass 8–20 blocks away, stroll (1.2 blocks a
+second), stand about, turn, hop up steps, and waddle as they walk; hit one (dig at it) and it's knocked back and
+runs off. They use the player's physics with their own size (0.9 × 0.9 blocks) against a wider box of blocks read
+back twice a second (40 × 28 × 40), and despawn 40 blocks away (`src/world/pigs.ts`). The model is
+`assets/pig.glb` (meshopt-compressed and quantized), turned once by `node scripts/convert-pig.mjs` into
+`public/models/pig.bin` (plain vertices, 108 KB) and `pig.webp` (its texture), and drawn as instances of one
+textured mesh (`src/render/mobModel.ts`, `mobShader`) with the blocks' light and fog, safe mode included.
+
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
 cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise unused; the 3 type
 bits are all taken), so it's solid like stone everywhere and digs like stone; the meshers pass the colour to the

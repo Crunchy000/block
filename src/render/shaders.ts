@@ -242,6 +242,61 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 }
 `;
 
+/**
+ * Mobs (the pig): a textured model, one instance per mob, placed by its feet position and
+ * yaw, with a waddle (a roll along its length) and a bob while it walks. The blocks' sun
+ * and fog.
+ */
+export const mobShader = /* wgsl */ `
+${uniforms}
+@group(0) @binding(1) var skin: texture_2d<f32>;
+@group(0) @binding(2) var skinSampler: sampler;
+
+struct VSOut {
+  @builtin(position) pos: vec4f,
+  @location(0) world: vec3f,
+  @location(1) normal: vec3f,
+  @location(2) uv: vec2f,
+};
+
+const MIDDLE: f32 = 0.45; // the waddle rolls about the body's middle height
+
+@vertex
+fn vs(
+  @location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
+  @location(3) place: vec4f, // feet position, yaw
+  @location(4) pose: vec4f,  // waddle (roll), bob
+) -> VSOut {
+  let cr = cos(pose.x);
+  let sr = sin(pose.x);
+  let q = p - vec3f(0.0, MIDDLE, 0.0);
+  let rolled = vec3f(q.x * cr - q.y * sr, q.x * sr + q.y * cr + MIDDLE + pose.y, q.z);
+  let rn = vec3f(n.x * cr - n.y * sr, n.x * sr + n.y * cr, n.z);
+  // Yaw: the model faces -z, turned like the camera (forward = (-sin yaw, 0, -cos yaw)).
+  let c = cos(place.w);
+  let s = sin(place.w);
+  let world = vec3f(rolled.x * c + rolled.z * s, rolled.y, -rolled.x * s + rolled.z * c) + place.xyz;
+  var o: VSOut;
+  o.pos = u.viewProj * vec4f(world, 1.0);
+  o.world = world;
+  o.normal = vec3f(rn.x * c + rn.z * s, rn.y, -rn.x * s + rn.z * c);
+  o.uv = uv;
+  return o;
+}
+
+@fragment
+fn fs(in: VSOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
+  let base = textureSample(skin, skinSampler, in.uv).rgb;
+  let normal = normalize(select(-in.normal, in.normal, front));
+  let sun = normalize(vec3f(0.4, 0.85, 0.3));
+  var lit = base * (0.6 + 0.4 * max(dot(normal, sun), 0.0));
+  let dist = distance(in.world, u.camPos.xyz);
+  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, u.fogCap.x);
+  lit = mix(lit, u.sky.rgb, fog);
+  return vec4f(lit, 1.0);
+}
+`;
+
 export const lineShader = /* wgsl */ `
 ${uniforms}
 

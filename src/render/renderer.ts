@@ -2,7 +2,8 @@ import type { ChunkDraw } from '../world/world';
 import { requestGpu } from './gpu';
 import { ClassicMeshes, VERTEX_FLOATS } from './classicMeshes';
 import type { MeshPool } from './meshPool';
-import { blockShader, classicBlockShader, farShader, lineShader } from './shaders';
+import { MOB_VERTEX_FLOATS, type MobModel } from './mobModel';
+import { blockShader, classicBlockShader, farShader, lineShader, mobShader } from './shaders';
 
 /** Reversed depth (math.ts perspective): float depth keeps precision at any view distance. */
 const DEPTH: GPUTextureFormat = 'depth32float';
@@ -24,6 +25,12 @@ export interface FarDraw {
   look: 'mist' | 'silhouette' | 'colour';
   /** How far it reaches (blocks). */
   extent: number;
+}
+
+/** Mobs to draw: a model, and per mob 8 floats (x, y, z, yaw, waddle, bob, 0, 0; see world/pigs.ts). */
+export interface MobDraw {
+  model: MobModel;
+  instances: Float32Array<ArrayBuffer>;
 }
 
 export interface RendererOptions {
@@ -62,6 +69,12 @@ export class Renderer {
   private farPipeline!: GPURenderPipeline;
   private farUniforms!: GPUBuffer;
   private farGroup!: GPUBindGroup;
+  private mobPipeline!: GPURenderPipeline;
+  private mobLayout!: GPUBindGroupLayout;
+  private mobGroup?: GPUBindGroup;
+  private mobGroupFor?: GPUTexture;
+  private mobInstances?: GPUBuffer;
+  private mobSampler!: GPUSampler;
 
   private constructor(
     readonly device: GPUDevice,
@@ -168,6 +181,46 @@ export class Renderer {
       depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' },
     });
 
+    // Mobs: textured models, one instance per mob (plain vertex buffers and a texture: safe mode too).
+    this.mobLayout = device.createBindGroupLayout({
+      entries: [
+        uniformEntry,
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+      ],
+    });
+    this.mobSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat' });
+    const mobModule = device.createShaderModule({ label: 'mobs', code: mobShader });
+    this.mobPipeline = device.createRenderPipeline({
+      label: 'mobs',
+      layout: device.createPipelineLayout({ bindGroupLayouts: [this.mobLayout] }),
+      vertex: {
+        module: mobModule,
+        entryPoint: 'vs',
+        buffers: [
+          {
+            arrayStride: MOB_VERTEX_FLOATS * 4,
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x3' },
+              { shaderLocation: 1, offset: 12, format: 'float32x3' },
+              { shaderLocation: 2, offset: 24, format: 'float32x2' },
+            ],
+          },
+          {
+            arrayStride: 32,
+            stepMode: 'instance',
+            attributes: [
+              { shaderLocation: 3, offset: 0, format: 'float32x4' },
+              { shaderLocation: 4, offset: 16, format: 'float32x4' },
+            ],
+          },
+        ],
+      },
+      fragment: { module: mobModule, entryPoint: 'fs', targets: [{ format: this.format }] },
+      primitive: { topology: 'triangle-list', cullMode: 'none' },
+      depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' },
+    });
+
     const lineModule = device.createShaderModule({ label: 'lines', code: lineShader });
     this.linePipeline = device.createRenderPipeline({
       label: 'lines',
@@ -253,7 +306,7 @@ export class Renderer {
    */
   render(
     viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>,
-    pool: MeshPool | ClassicMeshes, draws: ChunkDraw[], far?: FarDraw,
+    pool: MeshPool | ClassicMeshes, draws: ChunkDraw[], far?: FarDraw, mobs?: MobDraw,
   ): void {
     // A canvas throttles us to what the GPU can present; offscreen nothing does, and on a
     // slow GPU frames would pile up in the queue ahead of the block-update work. Skip
@@ -273,6 +326,25 @@ export class Renderer {
       this.lineBuffer = device.createBuffer({ size: Math.max(lines.byteLength, 1 << 16), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     }
     if (lines.length > 0) device.queue.writeBuffer(this.lineBuffer!, 0, lines);
+    const mobCount = mobs ? mobs.instances.length / 8 : 0;
+    if (mobs && mobCount > 0) {
+      if (!this.mobInstances || this.mobInstances.size < mobs.instances.byteLength) {
+        this.mobInstances?.destroy();
+        this.mobInstances = device.createBuffer({ size: Math.max(mobs.instances.byteLength, 32 * 16), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+      }
+      device.queue.writeBuffer(this.mobInstances, 0, mobs.instances);
+      if (this.mobGroupFor !== mobs.model.texture) {
+        this.mobGroupFor = mobs.model.texture;
+        this.mobGroup = device.createBindGroup({
+          layout: this.mobLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.uniformBuffer } },
+            { binding: 1, resource: mobs.model.texture.createView() },
+            { binding: 2, resource: this.mobSampler },
+          ],
+        });
+      }
+    }
     if (far) device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([...far.near, far.seaY, ['colour', 'silhouette', 'mist'].indexOf(far.look), far.extent, 0]));
 
     const encoder = device.createCommandEncoder();
@@ -310,6 +382,16 @@ export class Renderer {
       pass.setVertexBuffer(0, far.vertex);
       pass.setIndexBuffer(far.index, 'uint32');
       pass.drawIndexed(far.indexCount);
+      pass.setBindGroup(0, this.groupFor(pool));
+    }
+
+    if (mobs && mobCount > 0) {
+      pass.setPipeline(this.mobPipeline);
+      pass.setBindGroup(0, this.mobGroup!);
+      pass.setVertexBuffer(0, mobs.model.vertex);
+      pass.setVertexBuffer(1, this.mobInstances!);
+      pass.setIndexBuffer(mobs.model.index, 'uint16');
+      pass.drawIndexed(mobs.model.indexCount, mobCount);
       pass.setBindGroup(0, this.groupFor(pool));
     }
 

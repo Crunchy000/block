@@ -6,6 +6,10 @@ export const HALF_WIDTH = 0.3;
 export const BODY_HEIGHT = 1.8;
 export const EYE_HEIGHT = 1.62;
 
+/** A body's box: half its width (x and z) and its height, standing at its feet. */
+export interface BodySize { halfWidth: number; height: number }
+export const PLAYER_SIZE: BodySize = { halfWidth: HALF_WIDTH, height: BODY_HEIGHT };
+
 /** Blocks a second. */
 export const WALK_SPEED = 4.5;
 export const RUN_SPEED = 7;
@@ -50,16 +54,18 @@ export class Nearby {
 }
 
 /** The cells a body standing at `feet` overlaps. */
-function* cellsOf(feet: readonly number[]): Generator<[number, number, number]> {
-  const e = 1e-6;
-  for (let y = Math.floor(feet[1] + e); y <= Math.floor(feet[1] + BODY_HEIGHT - e); y++)
-    for (let z = Math.floor(feet[2] - HALF_WIDTH + e); z <= Math.floor(feet[2] + HALF_WIDTH - e); z++)
-      for (let x = Math.floor(feet[0] - HALF_WIDTH + e); x <= Math.floor(feet[0] + HALF_WIDTH - e); x++) yield [x, y, z];
+function* cellsOf(feet: readonly number[], size: BodySize): Generator<[number, number, number]> {
+  const e = 1e-6, w = size.halfWidth;
+  for (let y = Math.floor(feet[1] + e); y <= Math.floor(feet[1] + size.height - e); y++)
+    for (let z = Math.floor(feet[2] - w + e); z <= Math.floor(feet[2] + w - e); z++)
+      for (let x = Math.floor(feet[0] - w + e); x <= Math.floor(feet[0] + w - e); x++) yield [x, y, z];
 }
 
 /** Whether a body at `feet` overlaps a block that `type` says it can't be in. */
-export function overlaps(feet: readonly number[], typeAt: (x: number, y: number, z: number) => number, test = blocks): boolean {
-  for (const [x, y, z] of cellsOf(feet)) if (test(typeAt(x, y, z))) return true;
+export function overlaps(
+  feet: readonly number[], typeAt: (x: number, y: number, z: number) => number, test = blocks, size = PLAYER_SIZE,
+): boolean {
+  for (const [x, y, z] of cellsOf(feet, size)) if (test(typeAt(x, y, z))) return true;
   return false;
 }
 
@@ -67,10 +73,12 @@ export function overlaps(feet: readonly number[], typeAt: (x: number, y: number,
  * Move a body at `feet` by `delta`, one axis at a time (up/down first), in short steps,
  * stopping flush against blocks. Moves `feet` in place; returns which axes were stopped.
  */
-export function moveBody(feet: number[], delta: readonly number[], typeAt: (x: number, y: number, z: number) => number): [boolean, boolean, boolean] {
+export function moveBody(
+  feet: number[], delta: readonly number[], typeAt: (x: number, y: number, z: number) => number, size = PLAYER_SIZE,
+): [boolean, boolean, boolean] {
   const hit: [boolean, boolean, boolean] = [false, false, false];
   // How far the body reaches from its feet, below and above, along each axis.
-  const below = [HALF_WIDTH, 0, HALF_WIDTH], above = [HALF_WIDTH, BODY_HEIGHT, HALF_WIDTH];
+  const w = size.halfWidth, below = [w, 0, w], above = [w, size.height, w];
   for (const axis of [1, 0, 2]) {
     let left = delta[axis];
     while (left !== 0 && !hit[axis]) {
@@ -79,7 +87,7 @@ export function moveBody(feet: number[], delta: readonly number[], typeAt: (x: n
       feet[axis] += d;
       // Of the blocking cells now overlapped, the one nearest where the body came from.
       let stop: number | undefined;
-      for (const cell of cellsOf(feet)) {
+      for (const cell of cellsOf(feet, size)) {
         if (!blocks(typeAt(cell[0], cell[1], cell[2]))) continue;
         const c = cell[axis];
         stop = stop === undefined ? c : d > 0 ? Math.min(stop, c) : Math.max(stop, c);
@@ -101,11 +109,13 @@ export interface WalkInput {
   run: boolean;
 }
 
-/** Walking, running, jumping and swimming, with collisions. */
+/** Walking, running, jumping and swimming, with collisions (the player's, or a mob's with its own size and speeds). */
 export class Body {
   velocity: [number, number, number] = [0, 0, 0];
   onGround = false;
   inFluid = false;
+
+  constructor(readonly size = PLAYER_SIZE, readonly walkSpeed = WALK_SPEED, readonly runSpeed = RUN_SPEED) {}
 
   /**
    * One step for a body standing at `feet` (moved in place), facing `yaw`. Waits (doesn't
@@ -114,17 +124,18 @@ export class Body {
   step(feet: number[], dt: number, yaw: number, input: WalkInput, typeAt: (x: number, y: number, z: number) => number): void {
     const v = this.velocity;
     // Stuck in a block (spawned in the ground, or a block appeared): climb out, a block at a time.
-    if (overlaps(feet, typeAt, (t) => t === NOT_LOADED)) return; // not known yet
-    if (overlaps(feet, typeAt)) {
+    const size = this.size;
+    if (overlaps(feet, typeAt, (t) => t === NOT_LOADED, size)) return; // not known yet
+    if (overlaps(feet, typeAt, blocks, size)) {
       feet[1] = Math.floor(feet[1]) + 1;
       v[0] = v[1] = v[2] = 0;
       return;
     }
-    this.inFluid = overlaps(feet, typeAt, isFluid);
+    this.inFluid = overlaps(feet, typeAt, isFluid, size);
 
     // Along the ground, toward where the controls point.
     const len = Math.hypot(input.right, input.forward);
-    const speed = (input.run ? RUN_SPEED : WALK_SPEED) * (this.inFluid ? SWIM_FACTOR : 1) / Math.max(1, len);
+    const speed = (input.run ? this.runSpeed : this.walkSpeed) * (this.inFluid ? SWIM_FACTOR : 1) / Math.max(1, len);
     const sin = Math.sin(yaw), cos = Math.cos(yaw);
     const wish = [(-sin * input.forward + cos * input.right) * speed, (-cos * input.forward - sin * input.right) * speed];
     const grip = 1 - Math.exp(-(this.onGround ? GRIP_GROUND : this.inFluid ? GRIP_FLUID : GRIP_AIR) * dt);
@@ -139,7 +150,7 @@ export class Body {
     }
 
     const falling = v[1] < 0;
-    const hit = moveBody(feet, [v[0] * dt, v[1] * dt, v[2] * dt], typeAt);
+    const hit = moveBody(feet, [v[0] * dt, v[1] * dt, v[2] * dt], typeAt, size);
     this.onGround = hit[1] && falling;
     if (hit[1]) v[1] = 0;
     if (hit[0]) v[0] = 0;

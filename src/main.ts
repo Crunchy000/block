@@ -11,6 +11,7 @@ import type { RayHit } from './player/raycast';
 import { fpsView, frustum, multiply, perspective } from './render/math';
 import { ClassicMeshes } from './render/classicMeshes';
 import { MeshPool } from './render/meshPool';
+import { loadMobModel, type MobModel } from './render/mobModel';
 import { Renderer } from './render/renderer';
 import { checkGpuStore } from './sim/check';
 import { CpuStore } from './sim/cpuStore';
@@ -20,6 +21,7 @@ import { NOT_LOADED, ringSize, type CellStore } from './sim/store';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
 import { createHotbar } from './ui/hotbar';
 import { Drops, diamondDropCount } from './world/drops';
+import { Pigs } from './world/pigs';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
 import { generateMissing } from './world/loader';
 import { World, meshSlotCount } from './world/world';
@@ -334,6 +336,31 @@ async function main(): Promise<void> {
       .finally(() => { readingBox = false; });
   };
 
+  // Pigs wander on the grass around the player. They need the blocks over a wider area than
+  // the player does, but not every frame: a bigger box, read back twice a second.
+  const MOB_BOX = [40, 28, 40];
+  const pigs = new Pigs();
+  let mobBlocks: Nearby | undefined;
+  let readingMobBox = false, mobBoxAt = 0;
+  const readMobBox = (now: number) => {
+    if (readingMobBox || now - mobBoxAt < 500) return;
+    readingMobBox = true;
+    mobBoxAt = now;
+    const p = controls.position, asked = edits;
+    const min = [Math.floor(p[0]) - MOB_BOX[0] / 2, Math.floor(p[1]) - 16, Math.floor(p[2]) - MOB_BOX[2] / 2];
+    store.readBox(min, MOB_BOX)
+      .then((types) => { if (asked === edits) mobBlocks = new Nearby(min, MOB_BOX, types); else mobBoxAt = 0; })
+      .catch((e: unknown) => logError('Reading the blocks around the pigs failed', e))
+      .finally(() => { readingMobBox = false; });
+  };
+  let pigModel: MobModel | undefined;
+  loadMobModel(device, 'models/pig.bin', 'models/pig.webp')
+    .then((model) => { pigModel = model; })
+    .catch((e: unknown) => logError('Loading the pig model failed (no pigs)', e));
+  let pigHitCooldown = 0;
+  // ?debug: the world, pigs and controls on window.blockDebug, for poking at from the console (and scripted checks).
+  if (params.has('debug')) Object.assign(window, { blockDebug: { world, pigs, controls } });
+
   const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
       const slot = /^Digit([1-9])$/.exec(key);
@@ -358,6 +385,7 @@ async function main(): Promise<void> {
         if (!controls.flying && inside) continue;
         world.setCell(...hit.before, concrete(selected));
         nearby?.set(...hit.before, Block.Stone);
+        mobBlocks?.set(...hit.before, Block.Stone);
       } else continue;
       edits++;
       hit = null;
@@ -370,11 +398,26 @@ async function main(): Promise<void> {
   const drops = new Drops();
   const digRing = $('dig');
   const dig = (dt: number) => {
+    // A pig in front of the block under the crosshair gets hit instead (knocked back, it runs off).
+    pigHitCooldown -= dt;
+    const eye = controls.position;
+    const pig = pigs.raycast(eye, controls.look, PICK_DISTANCE);
+    const blockDist = hit ? Math.hypot(...hit.block.map((v, k) => v + 0.5 - eye[k])) : Infinity;
+    if (pig && pig.dist < blockDist) {
+      if (controls.digging && pigHitCooldown <= 0) {
+        pigs.hit(pig.pig, eye);
+        pigHitCooldown = 0.5;
+      }
+      digging.step(dt, false, undefined, undefined);
+      digRing.classList.remove('on');
+      return;
+    }
     // y = 0 is bedrock: it holds up fluids at the bottom of the world.
     const target = hit && hit.block[1] > 0 ? hit : null;
     if (digging.step(dt, controls.digging, target?.block, target?.type) && target) {
       world.setCell(...target.block, cell(Block.Air));
       nearby?.set(...target.block, Block.Air);
+      mobBlocks?.set(...target.block, Block.Air);
       if (target.type === Block.Diamond) for (let n = diamondDropCount(); n > 0; n--) drops.spawn(...target.block);
       edits++;
       hit = null;
@@ -439,6 +482,11 @@ async function main(): Promise<void> {
     handleInput();
     pick();
     dig(dt);
+    readMobBox(now);
+    if (mobBlocks && pigModel) {
+      const p = controls.position, blocksNear = mobBlocks;
+      pigs.update(dt, [p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => blocksNear.at(x, y, z));
+    }
 
     if (!paused && now - lastTick >= TICK_MS && !sim.busy) {
       lastTick = now;
@@ -472,7 +520,7 @@ async function main(): Promise<void> {
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws, far?.ready ? {
       vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE, look: farLook as 'mist' | 'silhouette' | 'colour', extent: far.extent,
       near: [(wcx - vr) * CHUNK_SIZE, (wcz - vr) * CHUNK_SIZE, (wcx + vr + 1) * CHUNK_SIZE, (wcz + vr + 1) * CHUNK_SIZE],
-    } : undefined);
+    } : undefined, pigModel && pigs.pigs.length > 0 ? { model: pigModel, instances: pigs.instances() } : undefined);
 
     const saved = world.savedCount(), counts = world.counts();
     hud.textContent = [
@@ -486,7 +534,7 @@ async function main(): Promise<void> {
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       far ? `far terrain: ${farLook}, out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
-      `placing: ${CONCRETE_COLOURS[selected].name} concrete   diamonds: ${diamonds}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
+      `placing: ${CONCRETE_COLOURS[selected].name} concrete   diamonds: ${diamonds}   pigs: ${pigs.pigs.length}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
   };
