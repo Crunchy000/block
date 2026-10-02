@@ -57,6 +57,7 @@ export class TouchControls {
     toolbar.append(
       this.toggleButton('Fly', 'KeyF', 'Fly through blocks, or walk'),
       this.toggleButton('Music', 'KeyM', 'Music on or off'),
+      this.toggleButton('Sounds', 'KeyN', 'Sound effects on or off'),
       this.toggleButton('Outlines', 'KeyG', 'Toggle chunk and ghost-halo outlines'),
       this.toggleButton('Pause', 'KeyP', 'Pause block updates'),
       this.tapButton('Menu', 'Show the start screen', () => this.controls.stopTouch()),

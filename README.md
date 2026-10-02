@@ -17,7 +17,7 @@ npm run build
 **Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD walk ·
 Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (through blocks; Space / Shift up/down,
 Ctrl to fly faster) · left click break · right click place ·
-`1`–`8` pastel concrete colours · `M` music on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
+`1`–`8` pastel concrete colours · `M` music on/off · `N` sounds on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
 **Farm animals:** up to 10 wander the grass around you: cows, sheep, pigs, chickens, horses, rabbits, cats and
 mice ("Cube Farm Animals" by [ezgi bakim](https://sketchfab.com/ezgibakim),
@@ -37,6 +37,14 @@ fetched only once play starts). It fades in when play starts (browsers only let 
 tap) and out on the start screen or when the tab is hidden; `M` or the touch Music button switch it off, remembered
 between visits (`src/ui/music.ts`).
 
+**Sound effects** (`src/ui/sounds.ts`, Web Audio): cows, pigs, sheep and chickens call now and then (recordings in
+`public/sounds/`, trimmed, levelled and mono, 33 KB together; the horse borrows the cow's, higher), and higher when
+hit; calls get quieter with distance and pan left or right of where you face. Everything else is synthesised on the
+spot from noise and tones, so there's nothing to download or credit: digging scrapes (dirt soft, stone sharp,
+diamond ore with a ping), a crunch and thump when a block breaks, a thud when you place one, footsteps (soft on
+grass and dirt, sharper on stone and concrete), a thud when you land from a fall, a splash into water and a chime
+when you pick up a diamond. `N` or the touch Sounds button switch them off (remembered).
+
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
 cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise unused; the 3 type
 bits are all taken), so it's solid like stone everywhere and digs like stone; the meshers pass the colour to the
@@ -55,7 +63,7 @@ meshing, picking, collisions).
 is a **dynamic stick**: it appears wherever your thumb lands, is analog (push further to go faster),
 and disappears when you let go; double-tap and hold it to run. Drag on the right half to look around.
 Buttons: Break (hold to dig), Place, ▲ to jump or swim up (▲ / ▼ up and down when flying), a
-hotbar to pick the colour, and Fly / Music / Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
+hotbar to pick the colour, and Fly / Music / Sounds / Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
 
 The bottom layer (y = 0) is unbreakable bedrock.
 

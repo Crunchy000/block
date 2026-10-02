@@ -21,6 +21,7 @@ import { NOT_LOADED, ringSize, type CellStore } from './sim/store';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
 import { createHotbar } from './ui/hotbar';
 import { Music } from './ui/music';
+import { Sounds } from './ui/sounds';
 import { Drops, diamondDropCount } from './world/drops';
 import { Animals, SPECIES } from './world/animals';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
@@ -220,6 +221,9 @@ async function main(): Promise<void> {
   // "The Longest Afternoon", looped while playing (M or the touch Music button switch it off).
   const music = new Music('music/the-longest-afternoon.mp3');
   touchUI.setToggle('KeyM', music.enabled);
+  // Sound effects (N or the touch Sounds button switch them off).
+  const sounds = new Sounds();
+  touchUI.setToggle('KeyN', sounds.enabled);
   controls.onPlayingChange = (playing) => {
     music.setPlaying(playing);
     overlay.classList.toggle('hidden', playing);
@@ -246,6 +250,7 @@ async function main(): Promise<void> {
     }
     controls.start(type);
     music.setPlaying(true); // within the click, which lets the page start sound
+    sounds.unlock();
   });
   const touchFirst = matchMedia('(pointer: coarse)').matches;
 
@@ -370,7 +375,7 @@ async function main(): Promise<void> {
     .catch((e: unknown) => logError('Loading the animal models failed (no animals)', e));
   let animalHitCooldown = 0;
   // ?debug: the world, animals and controls on window.blockDebug, for poking at from the console (and scripted checks).
-  if (params.has('debug')) Object.assign(window, { blockDebug: { world, animals, controls, music } });
+  if (params.has('debug')) Object.assign(window, { blockDebug: { world, animals, controls, music, sounds } });
 
   const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
@@ -385,6 +390,7 @@ async function main(): Promise<void> {
       }
       if (key === 'KeyG') touchUI.setToggle(key, showChunks = !showChunks);
       if (key === 'KeyM') touchUI.setToggle(key, music.toggle());
+      if (key === 'KeyN') touchUI.setToggle(key, sounds.toggle());
       if (key === 'KeyP') touchUI.setToggle(key, paused = !paused);
     }
     for (const button of controls.takeClicks()) {
@@ -396,6 +402,7 @@ async function main(): Promise<void> {
         const inside = overlaps([p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => (x === bx && y === by && z === bz ? Block.Stone : Block.Air));
         if (!controls.flying && inside) continue;
         world.setCell(...hit.before, concrete(selected));
+        sounds.placeBlock(hit.before.map((v) => v + 0.5));
         nearby?.set(...hit.before, Block.Stone);
         mobBlocks?.set(...hit.before, Block.Stone);
       } else continue;
@@ -418,6 +425,8 @@ async function main(): Promise<void> {
     if (struck && struck.dist < blockDist) {
       if (controls.digging && animalHitCooldown <= 0) {
         animals.hit(struck.animal, eye);
+        const a = struck.animal;
+        sounds.call(a.species.name, [a.feet[0], a.feet[1] + a.species.size.height / 2, a.feet[2]], true);
         animalHitCooldown = 0.5;
       }
       digging.step(dt, false, undefined, undefined);
@@ -426,7 +435,14 @@ async function main(): Promise<void> {
     }
     // y = 0 is bedrock: it holds up fluids at the bottom of the world.
     const target = hit && hit.block[1] > 0 ? hit : null;
+    const centre = target?.block.map((v) => v + 0.5);
+    if (digging.progress > 0 && target && (digTick -= dt) <= 0) {
+      sounds.dig(target.type, centre!);
+      digTick = 0.2;
+    }
     if (digging.step(dt, controls.digging, target?.block, target?.type) && target) {
+      sounds.breakBlock(target.type, centre!);
+      digTick = 0;
       world.setCell(...target.block, cell(Block.Air));
       nearby?.set(...target.block, Block.Air);
       mobBlocks?.set(...target.block, Block.Air);
@@ -439,7 +455,28 @@ async function main(): Promise<void> {
     // Pick up what's lying around (where the blocks are known).
     const p = controls.position;
     const got = drops.update(dt, [p[0], p[1] - 0.7, p[2]], nearby ? (x, y, z) => nearby!.at(x, y, z) : () => NOT_LOADED);
-    if (got > 0) setDiamonds(diamonds + got, true);
+    if (got > 0) {
+      setDiamonds(diamonds + got, true);
+      sounds.pickup();
+    }
+  };
+  let digTick = 0;
+
+  // Footsteps, landing and splashing, from how the player's body moved this frame.
+  let stepDistance = 0;
+  const bodySounds = (before: { onGround: boolean; inFluid: boolean; fallSpeed: number; feet: number[] }) => {
+    if (controls.flying) return;
+    const b = controls.body, p = controls.position, feet = [p[0], p[1] - EYE_HEIGHT, p[2]];
+    if (!before.inFluid && b.inFluid) sounds.splash();
+    if (!before.onGround && b.onGround && before.fallSpeed > 7 && !b.inFluid) sounds.land(before.fallSpeed);
+    if (b.onGround && !b.inFluid) {
+      stepDistance += Math.hypot(feet[0] - before.feet[0], feet[2] - before.feet[2]);
+      if (stepDistance > 1.7) {
+        stepDistance = 0;
+        const under = nearby?.at(Math.floor(feet[0]), Math.floor(feet[1] - 0.05), Math.floor(feet[2]));
+        if (under !== undefined && under !== NOT_LOADED) sounds.step(under as Block);
+      }
+    }
   };
 
   const buildLines = (hit: RayHit | null): Float32Array<ArrayBuffer> => {
@@ -485,7 +522,13 @@ async function main(): Promise<void> {
     fps = fps * 0.95 + (dt > 0 ? 1 / dt : 0) * 0.05;
 
     readNearby();
+    const was = {
+      onGround: controls.body.onGround, inFluid: controls.body.inFluid, fallSpeed: -controls.body.velocity[1],
+      feet: [controls.position[0], controls.position[1] - EYE_HEIGHT, controls.position[2]],
+    };
     controls.update(dt, nearby && ((x, y, z) => nearby!.at(x, y, z)));
+    bodySounds(was);
+    sounds.setListener({ position: controls.position, yaw: controls.yaw });
     const [px, py, pz] = controls.position;
     world.recenter(px, pz);
     pumpGeneration();
@@ -498,6 +541,12 @@ async function main(): Promise<void> {
     if (mobBlocks && animalsReady) {
       const p = controls.position, blocksNear = mobBlocks;
       animals.update(dt, [p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => blocksNear.at(x, y, z));
+      // Now and then an animal calls (about every 12 s each).
+      for (const a of animals.animals) {
+        if (sounds.hasCall(a.species.name) && Math.random() < dt / 12) {
+          sounds.call(a.species.name, [a.feet[0], a.feet[1] + a.species.size.height / 2, a.feet[2]]);
+        }
+      }
     }
 
     if (!paused && now - lastTick >= TICK_MS && !sim.busy) {
@@ -546,7 +595,7 @@ async function main(): Promise<void> {
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       far ? `far terrain: ${farLook}, out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
-      `placing: ${CONCRETE_COLOURS[selected].name} concrete   diamonds: ${diamonds}   animals: ${animals.animals.length}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [M] music ${music.enabled ? 'on' : 'off'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
+      `placing: ${CONCRETE_COLOURS[selected].name} concrete   diamonds: ${diamonds}   animals: ${animals.animals.length}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [M] music ${music.enabled ? 'on' : 'off'}   [N] sounds ${sounds.enabled ? 'on' : 'off'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
   };
