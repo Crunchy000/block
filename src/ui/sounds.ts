@@ -1,11 +1,11 @@
 import { Block } from '../constants';
 
 /**
- * Sound effects, through the Web Audio API. Animal calls, a block breaking, footsteps and
- * a splash are short recordings (public/sounds/*.mp3, played at slightly varied pitch so
- * repeats differ); the rest is made on the spot from noise and tones: digging scrapes,
- * placing a block, landing, and picking up a diamond (and the recorded ones too, should a
- * file fail to load).
+ * Sound effects, through the Web Audio API. Animal calls, a block breaking and a splash
+ * are short recordings (public/sounds/*.mp3, played at slightly varied pitch so repeats
+ * differ); the rest is made on the spot from noise and tones: digging scrapes, placing a
+ * block, landing and footsteps (the same soft thud), and picking up a diamond (and the
+ * recorded ones too, should a file fail to load).
  *
  * Sounds at a place in the world get quieter with distance and pan left or right of where
  * the player faces. Browsers only let a page start sound from a click or tap, so the audio
@@ -21,7 +21,7 @@ const CALLS: Record<string, { file: string; rate: number }> = {
   horse: { file: 'cow', rate: 1.45 },
 };
 /** Every recording to load. */
-const FILES = ['cow', 'pig', 'sheep', 'chicken', 'break', 'step', 'splash'];
+const FILES = ['cow', 'pig', 'sheep', 'chicken', 'break', 'splash'];
 /** Sounds further away than this aren't heard. */
 const HEARING = 24;
 
@@ -188,17 +188,20 @@ export class Sounds {
 
   /** A footstep on a block of `type` (grass and dirt soft, stone sharper). */
   step(type: Block): void {
+    // The landing thud, softer, a little higher on stone and concrete, varied so steps differ.
     const hard = type === Block.Stone || type === Block.Diamond;
-    if (this.sample('step', hard ? 0.5 : 0.4, (hard ? 1.15 : 0.9) * (0.92 + Math.random() * 0.16))) return;
-    if (hard) this.burst({ volume: 0.16, seconds: 0.05, filter: 'bandpass', freq: 1700 + Math.random() * 500, q: 2 });
-    else this.burst({ volume: 0.22, seconds: 0.07, filter: 'lowpass', freq: 600 + Math.random() * 300, q: 0.7 });
+    this.thud(0.3, (hard ? 1.2 : 1) * (0.9 + Math.random() * 0.2));
   }
 
   /** Landing after a fall, louder the harder. */
   land(speed: number): void {
-    const v = Math.min(1, speed / 20);
-    this.tone({ volume: 0.25 + 0.4 * v, seconds: 0.12, from: 140, to: 55 });
-    this.burst({ volume: 0.2 + 0.3 * v, seconds: 0.1, filter: 'lowpass', freq: 800 });
+    this.thud(0.5 + 0.5 * Math.min(1, speed / 20), 1);
+  }
+
+  /** A soft low thud (landing, and footsteps): a falling tone and a muffled burst, `volume` 0..1. */
+  private thud(volume: number, pitch: number): void {
+    this.tone({ volume: 0.65 * volume, seconds: 0.12, from: 140 * pitch, to: 55 * pitch });
+    this.burst({ volume: 0.5 * volume, seconds: 0.1, filter: 'lowpass', freq: 800 * pitch });
   }
 
   /** Falling or walking into water. */
