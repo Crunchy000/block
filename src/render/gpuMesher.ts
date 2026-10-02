@@ -82,7 +82,8 @@ fn cellFaces(wg: vec3u, li: u32) {
     }
   } else if (t != AIR) {
     let fluid = water || t == LAVA;
-    let h = select(0, heightCode(c, cellAt(y + 1, z, x)), fluid);
+    // aux: a fluid's surface height; stone's level (its concrete colour, 0 for plain stone).
+    let h = select(select(0, min(c >> 3u, 15), t == STONE), heightCode(c, cellAt(y + 1, z, x)), fluid);
     for (var f = 0; f < 6; f++) {
       // The normal of side f: +x, -x, +y, -y, +z, -z.
       let s = 1 - 2 * (f & 1);

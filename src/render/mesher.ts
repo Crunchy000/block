@@ -11,7 +11,7 @@ import {
 //   x 4 | z 4 | y 6       the block, chunk-local
 //   face 4                a Face
 //   type 3                the block type
-//   aux 4                 fluids: surface height code (heightCode); wheat: growth stage; else 0
+//   aux 4                 fluids: surface height code (heightCode); wheat: growth stage; stone: concrete colour (0 plain); else 0
 
 export const enum Face {
   // The six sides of a block (normals +x, -x, +y, -y, +z, -z).
@@ -92,7 +92,8 @@ export function meshFaces(cellAt: (x: number, y: number, z: number) => number): 
           continue;
         }
         const fluid = t === Block.Water || t === Block.Lava;
-        const h = fluid ? heightCode(c, at(x, y + 1, z)) : 0;
+        // aux: a fluid's surface height; stone's level (its concrete colour, 0 for plain stone).
+        const h = fluid ? heightCode(c, at(x, y + 1, z)) : t === Block.Stone ? Math.min(cellLevel(c), 15) : 0;
         for (let f = Face.East; f <= Face.North; f++) {
           const [nx, ny, nz] = FACE_NORMALS[f];
           const nc = at(x + nx, y + ny, z + nz), nt = cellType(nc);
@@ -130,5 +131,5 @@ export function faceQuad(record: number, ox: number, oz: number): Quad {
   }
   const h = type === Block.Water || type === Block.Lava ? fluidHeight(aux) : 1;
   const corners = FACE_CORNERS[face].map((o) => [bx + o[0], y + (o[1] === 1 ? h : 0), bz + o[2]]);
-  return { corners, normal: FACE_NORMALS[face], kind: type };
+  return { corners, normal: FACE_NORMALS[face], kind: type === Block.Stone ? type + 16 * aux : type };
 }

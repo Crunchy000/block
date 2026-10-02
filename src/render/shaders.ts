@@ -1,4 +1,4 @@
-import { Block, FALLING_LEVEL, SOURCE_LEVEL } from '../constants';
+import { Block, CONCRETE_COLOURS, FALLING_LEVEL, SOURCE_LEVEL } from '../constants';
 import { FACE_CORNERS, FACE_NORMALS, FULL_HEIGHT, Face, PLANT_QUADS } from './mesher';
 
 const uniforms = /* wgsl */ `
@@ -70,6 +70,7 @@ fn faceVertex(record: u32, slot: u32, vertex: u32) -> VSOut {
     let c = corners[face * 4u + k];
     let h = select(1.0, fluidHeight(aux), t == WATER || t == LAVA);
     pos = block + vec3f(c.x, c.y * h, c.z);
+    if (t == ${Block.Stone}u) { kind = t + 16u * aux; } // concrete colour
     normal = normals[face];
   }
 
@@ -110,7 +111,15 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   // Block type in the low 4 bits; wheat carries its growth stage above them.
   let stage = in.kind >> 4u;
   switch in.kind & 15u {
-    case 1u: { base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n); }               // stone
+    case 1u: {                                                                    // stone, or pastel concrete
+      if (stage == 0u) {
+        base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n);
+      } else {
+        var concrete = array<vec3f, ${CONCRETE_COLOURS.length}>(${CONCRETE_COLOURS.map((c) => `vec3f(${c.rgb.join(', ')})`).join(', ')});
+        base = concrete[min(stage, ${CONCRETE_COLOURS.length}u) - 1u] * (0.97 + 0.05 * n); // smooth, matte
+        emissive = 0.4; // stays pastel in shade (still shaded enough to show its edges)
+      }
+    }
     case 2u: { base = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n); }               // dirt
     case 3u: {                                                                    // water
       let w = 0.5 + 0.5 * sin(t * 1.5 + in.world.x * 0.8 + in.world.z * 0.6 + n * 2.0);
@@ -298,7 +307,15 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   // Block type in the low 4 bits; wheat carries its growth stage above them.
   let stage = in.kind >> 4u;
   switch in.kind & 15u {
-    case 1u: { base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n); }               // stone
+    case 1u: {                                                                    // stone, or pastel concrete
+      if (stage == 0u) {
+        base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n);
+      } else {
+        var concrete = array<vec3f, ${CONCRETE_COLOURS.length}>(${CONCRETE_COLOURS.map((c) => `vec3f(${c.rgb.join(', ')})`).join(', ')});
+        base = concrete[min(stage, ${CONCRETE_COLOURS.length}u) - 1u] * (0.97 + 0.05 * n); // smooth, matte
+        emissive = 0.4; // stays pastel in shade (still shaded enough to show its edges)
+      }
+    }
     case 2u: { base = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n); }               // dirt
     case 3u: {                                                                    // water
       let w = 0.5 + 0.5 * sin(t * 1.5 + in.world.x * 0.8 + in.world.z * 0.6 + n * 2.0);

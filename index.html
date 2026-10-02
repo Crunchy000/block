@@ -49,12 +49,6 @@
       .slot { position: relative; width: 44px; height: 44px; padding: 0; border: 2px solid rgba(255,255,255,.25); border-radius: 7px; background: none; cursor: pointer; }
       .slot.selected { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
       .swatch { position: absolute; inset: 5px; border-radius: 3px; }
-      .block-dirt .swatch { background: #8c613d; }
-      .block-stone .swatch { background: #808085; }
-      .block-water .swatch { background: #3366cc; }
-      .block-lava .swatch { background: linear-gradient(135deg, #ffb020, #e2400a); }
-      .block-grass .swatch { background: linear-gradient(#5d9e38 0 40%, #8c613d 40%); }
-      .block-wheat .swatch { background: repeating-linear-gradient(90deg, #d9b54a 0 3px, transparent 3px 7px), linear-gradient(transparent 70%, #8c613d 70%); }
       .slot.item { margin-left: 8px; cursor: default; display: inline-block; box-sizing: border-box; }
       .item-diamond .swatch { background: linear-gradient(135deg, #bff 0%, #4dd 45%, #1aa 100%); clip-path: polygon(50% 8%, 88% 42%, 50% 92%, 12% 42%); }
       .slot.empty .swatch { opacity: .4; }
@@ -108,11 +102,11 @@
         <div id="status">Loading…</div>
         <div id="error"></div>
         <div class="help keys">WASD walk · Space jump / swim · double-tap W (or Ctrl) run · F fly (Space/Shift up/down) · Esc release mouse<br />
-        Hold left click to dig (diamond ore drops diamonds) · Right click place · 1 dirt · 2 stone · 3 water · 4 lava · 5 grass · 6 wheat<br />
+        Hold left click to dig (diamond ore drops diamonds) · Right click place · 1–8 pastel concrete colours<br />
         G toggle chunk/ghost-halo outlines · P pause block updates</div>
         <div class="help touch">Left side: drag to walk (double-tap and hold to run)<br />
         Right side: drag to look · ▲ jump / swim · Fly button: fly (▲ ▼ up/down)<br />
-        Hold Break to dig, Place to build, at the crosshair · tap a block below to choose it</div>
+        Hold Break to dig, Place to build, at the crosshair · tap a colour below to choose it</div>
         <div id="view-distance" class="view-distance"></div>
         <a id="bench-link" class="bench-link" href="./bench.html?start">Benchmark this device: block updates per second</a>
         <a id="log-link" class="bench-link" href="./log.html">Logs from earlier visits (if the game crashed)</a>

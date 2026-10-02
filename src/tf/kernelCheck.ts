@@ -1,5 +1,5 @@
 import * as tf from '@tensorflow/tfjs';
-import { Block, PRIMED_DIRT, SOURCE_LEVEL, cell } from '../constants';
+import { Block, PRIMED_DIRT, SOURCE_LEVEL, cell, concrete } from '../constants';
 import { blockUpdateFused } from './blockUpdateKernel';
 import { blockUpdateReference, cellRandom } from './blockUpdateReference';
 
@@ -59,7 +59,7 @@ export async function checkFusedKernel(seed = 1234, ticks = 6): Promise<KernelCh
 export function randomCells(size: number, rand: () => number): Int32Array {
   return Int32Array.from({ length: size }, () => {
     const r = rand(), level = 1 + Math.floor(rand() * SOURCE_LEVEL);
-    return r < 0.45 ? cell(Block.Air) : r < 0.53 ? cell(Block.Stone) : r < 0.55 ? cell(Block.Diamond) : r < 0.67 ? cell(Block.Dirt)
+    return r < 0.45 ? cell(Block.Air) : r < 0.51 ? cell(Block.Stone) : r < 0.53 ? concrete(level - 1) : r < 0.55 ? cell(Block.Diamond) : r < 0.67 ? cell(Block.Dirt)
       : r < 0.7 ? PRIMED_DIRT : r < 0.76 ? cell(Block.Grass) : r < 0.82 ? cell(Block.Wheat, level - 1)
         : r < 0.91 ? cell(Block.Water, level) : cell(Block.Lava, level);
   });

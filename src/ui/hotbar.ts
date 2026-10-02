@@ -1,10 +1,8 @@
-import { BLOCK_NAMES, Block } from '../constants';
-
-/** Placeable blocks, in hotbar order (keys 1–6). Wheat is planted as a seedling on dirt or grass. */
-export const HOTBAR_BLOCKS = [Block.Dirt, Block.Stone, Block.Water, Block.Lava, Block.Grass, Block.Wheat] as const;
+import { CONCRETE_COLOURS } from '../constants';
 
 export interface Hotbar {
-  setSelected(block: Block): void;
+  /** Highlight the concrete colour being placed (an index into CONCRETE_COLOURS). */
+  setSelected(colour: number): void;
   /** Show how many diamonds you've collected. */
   setDiamonds(count: number): void;
   /** Flash the diamond count (one just picked up). */
@@ -12,24 +10,25 @@ export interface Hotbar {
 }
 
 /**
- * Block picker along the bottom of the screen, with the diamonds you've collected at its
- * end. Tapping a slot selects it; keys 1–6 do the same.
+ * The building blocks along the bottom of the screen, pastel concrete in each colour, with
+ * the diamonds you've collected at the end. Tapping a slot selects it; keys 1–8 do the same.
  */
-export function createHotbar(onSelect: (block: Block) => void, parent: HTMLElement = document.body): Hotbar {
+export function createHotbar(onSelect: (colour: number) => void, parent: HTMLElement = document.body): Hotbar {
   const bar = document.createElement('div');
   bar.className = 'hotbar';
-  const slots = HOTBAR_BLOCKS.map((block, i) => {
+  const slots = CONCRETE_COLOURS.map(({ name, rgb }, i) => {
     const slot = document.createElement('button');
-    slot.className = `slot block-${BLOCK_NAMES[block]}`;
-    slot.setAttribute('aria-label', `Place ${BLOCK_NAMES[block]}`);
+    slot.className = 'slot';
+    slot.setAttribute('aria-label', `Place ${name} concrete`);
     const swatch = document.createElement('span');
     swatch.className = 'swatch';
+    swatch.style.background = `rgb(${rgb.map((v) => Math.round(v * 255)).join(' ')})`;
     const key = document.createElement('span');
     key.className = 'key';
     key.textContent = String(i + 1);
     slot.append(swatch, key);
     slot.addEventListener('pointerdown', (e) => e.preventDefault());
-    slot.addEventListener('click', () => onSelect(block));
+    slot.addEventListener('click', () => onSelect(i));
     bar.append(slot);
     return slot;
   });
@@ -44,8 +43,8 @@ export function createHotbar(onSelect: (block: Block) => void, parent: HTMLEleme
   bar.append(gems);
   parent.append(bar);
   return {
-    setSelected(block) {
-      slots.forEach((slot, i) => slot.classList.toggle('selected', HOTBAR_BLOCKS[i] === block));
+    setSelected(colour) {
+      slots.forEach((slot, i) => slot.classList.toggle('selected', i === colour));
     },
     setDiamonds(n) {
       count.textContent = String(n);

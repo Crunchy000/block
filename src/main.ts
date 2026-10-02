@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import {
-  ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, DEFAULT_RATES, SOURCE_LEVEL, BLOCK_NAMES, cell,
+  ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, CONCRETE_COLOURS, DEFAULT_RATES, cell, concrete,
 } from './constants';
 import { log, logError } from './log';
 import { Controls } from './player/controls';
@@ -18,7 +18,7 @@ import { GpuStore } from './sim/gpuStore';
 import { Simulation } from './sim/simulation';
 import { NOT_LOADED, ringSize, type CellStore } from './sim/store';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
-import { HOTBAR_BLOCKS, createHotbar } from './ui/hotbar';
+import { createHotbar } from './ui/hotbar';
 import { Drops, diamondDropCount } from './world/drops';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
 import { generateMissing } from './world/loader';
@@ -260,10 +260,11 @@ async function main(): Promise<void> {
   const gpuName = [info.vendor, info.architecture || info.device || info.description].filter(Boolean).join(' ') || 'unknown';
 
   let generating = false;
-  let selected: Block = Block.Dirt;
+  /** The concrete colour placed (an index into CONCRETE_COLOURS). */
+  let selected = 0;
   let showChunks = params.has('chunks');
   let paused = false;
-  const hotbar = createHotbar((block) => { selected = block; hotbar.setSelected(block); });
+  const hotbar = createHotbar((colour) => { selected = colour; hotbar.setSelected(colour); });
   hotbar.setSelected(selected);
   touchUI.setToggle('KeyG', showChunks);
   touchUI.setToggle('KeyF', controls.flying);
@@ -336,8 +337,8 @@ async function main(): Promise<void> {
   const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
       const slot = /^Digit([1-9])$/.exec(key);
-      if (slot && HOTBAR_BLOCKS[Number(slot[1]) - 1] !== undefined) {
-        selected = HOTBAR_BLOCKS[Number(slot[1]) - 1];
+      if (slot && Number(slot[1]) <= CONCRETE_COLOURS.length) {
+        selected = Number(slot[1]) - 1;
         hotbar.setSelected(selected);
       }
       if (key === 'KeyF') {
@@ -353,11 +354,10 @@ async function main(): Promise<void> {
       if (button === 2) {
         // Not a solid block where the player stands.
         const [bx, by, bz] = hit.before, p = controls.position;
-        const inside = overlaps([p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => (x === bx && y === by && z === bz ? selected : Block.Air));
+        const inside = overlaps([p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => (x === bx && y === by && z === bz ? Block.Stone : Block.Air));
         if (!controls.flying && inside) continue;
-        const level = selected === Block.Water || selected === Block.Lava ? SOURCE_LEVEL : 0;
-        world.setCell(...hit.before, cell(selected, level));
-        nearby?.set(...hit.before, selected);
+        world.setCell(...hit.before, concrete(selected));
+        nearby?.set(...hit.before, Block.Stone);
       } else continue;
       edits++;
       hit = null;
@@ -486,7 +486,7 @@ async function main(): Promise<void> {
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       far ? `far terrain: ${farLook}, out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
-      `placing: ${BLOCK_NAMES[selected]}   diamonds: ${diamonds}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
+      `placing: ${CONCRETE_COLOURS[selected].name} concrete   diamonds: ${diamonds}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
   };

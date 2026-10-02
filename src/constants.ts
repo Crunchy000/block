@@ -31,6 +31,22 @@ export const enum Block {
 export const BLOCK_NAMES = ['air', 'stone', 'dirt', 'water', 'lava', 'grass', 'wheat', 'diamond'] as const;
 
 /**
+ * Pastel concrete, the player's building blocks: stone with a colour in its level bits
+ * (level 1..8; generated stone is level 0). Solid like stone everywhere; drawn smooth in
+ * its colour. Up to 8 fit the block-update tables (cell values below LEVEL_MUL * 9).
+ */
+export const CONCRETE_COLOURS: ReadonlyArray<{ name: string; rgb: [number, number, number] }> = [
+  { name: 'pink', rgb: [0.96, 0.71, 0.76] },
+  { name: 'peach', rgb: [0.98, 0.79, 0.66] },
+  { name: 'butter', rgb: [0.97, 0.9, 0.62] },
+  { name: 'mint', rgb: [0.7, 0.89, 0.78] },
+  { name: 'sky', rgb: [0.68, 0.83, 0.95] },
+  { name: 'periwinkle', rgb: [0.73, 0.76, 0.94] },
+  { name: 'lavender', rgb: [0.84, 0.76, 0.93] },
+  { name: 'cream', rgb: [0.95, 0.93, 0.88] },
+];
+
+/**
  * Level, stored in the high bits of a cell (cell = type + LEVEL_MUL * level).
  * Fluids: SOURCE_LEVEL marks a source block; 1..7 are flowing.
  * Dirt: 1 marks PRIMED_DIRT (see below). Wheat: growth stage 0..WHEAT_RIPE. Everything else: 0.
@@ -42,6 +58,8 @@ export const WATER_DECAY = 1;
 export const LAVA_DECAY = 2;
 
 export const cell = (type: Block, level = 0): number => type + LEVEL_MUL * level;
+/** The cell of pastel concrete colour `i` (an index into CONCRETE_COLOURS). */
+export const concrete = (i: number): number => cell(Block.Stone, i + 1);
 export const cellType = (c: number): Block => (c & 7) as Block;
 export const cellLevel = (c: number): number => c >> 3;
 

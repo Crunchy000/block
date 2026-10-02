@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Block, CHUNK_HEIGHT, CHUNK_SIZE, SOURCE_LEVEL, WHEAT_RIPE, blockIndex, cell } from '../src/constants';
+import {
+  Block, CHUNK_HEIGHT, CHUNK_SIZE, CONCRETE_COLOURS, SOURCE_LEVEL, WHEAT_RIPE, blockIndex, cell, concrete,
+} from '../src/constants';
 import {
   FULL_HEIGHT, Face, faceQuad, fluidHeight, heightCode, meshFaces, packFace, unpackFace, wheatHeight,
 } from '../src/render/mesher';
@@ -19,6 +21,19 @@ function flatArea() {
 const quads = (records: number[]) => records.map((r) => faceQuad(r, 0, 0));
 
 describe('meshFaces', () => {
+  it('gives pastel concrete faces their colour (plain stone none), drawn as stone', () => {
+    const area = flatArea();
+    area.set(5, 10, 5, concrete(3));
+    const faces = area.mesh().opaque.map(unpackFace).filter((f) => f.x === 5 && f.y === 10 && f.z === 5);
+    expect(faces).toHaveLength(5); // all but the bottom
+    expect(faces.every((f) => f.type === Block.Stone && f.aux === 4)).toBe(true);
+    const ground = area.mesh().opaque.map(unpackFace).find((f) => f.y === 9 && f.face === Face.Top)!;
+    expect(ground.aux).toBe(0);
+    const record = area.mesh().opaque.find((r) => unpackFace(r).y === 10)!;
+    expect(faceQuad(record, 0, 0).kind).toBe(Block.Stone + 16 * 4);
+    expect(CONCRETE_COLOURS).toHaveLength(8);
+  });
+
   it('emits only the top faces of a flat chunk (borders culled against neighbours)', () => {
     const { opaque, water } = flatArea().mesh();
     expect(opaque).toHaveLength(CHUNK_SIZE * CHUNK_SIZE);

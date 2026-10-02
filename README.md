@@ -17,7 +17,12 @@ npm run build
 **Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD walk ·
 Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (through blocks; Space / Shift up/down,
 Ctrl to fly faster) · left click break · right click place ·
-`1` dirt `2` stone `3` water `4` lava `5` grass `6` wheat · `G` chunk / ghost-halo outlines · `P` pause block updates.
+`1`–`8` pastel concrete colours · `G` chunk / ghost-halo outlines · `P` pause block updates.
+
+**Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
+cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise unused; the 3 type
+bits are all taken), so it's solid like stone everywhere and digs like stone; the meshers pass the colour to the
+shader the way they pass a fluid's height.
 
 **Diamonds:** diamond ore (stone with cyan gems) runs in small blobs through the deep stone, at y 24 and below
 (sea level is 30), about 190 blocks a chunk: dig down, or look in caves. Digging takes a moment, as with a
@@ -32,7 +37,7 @@ meshing, picking, collisions).
 is a **dynamic stick**: it appears wherever your thumb lands, is analog (push further to go faster),
 and disappears when you let go; double-tap and hold it to run. Drag on the right half to look around.
 Buttons: Break (hold to dig), Place, ▲ to jump or swim up (▲ / ▼ up and down when flying), a
-hotbar to pick the block, and Fly / Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
+hotbar to pick the colour, and Fly / Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
 
 The bottom layer (y = 0) is unbreakable bedrock.
 

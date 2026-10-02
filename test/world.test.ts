@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, DEFAULT_RATES, PRIMED_DIRT, SOURCE_LEVEL, WHEAT_RIPE, blockIndex, cell,
-  cellType,
+  cellType, concrete,
 } from '../src/constants';
 import { CpuStore } from '../src/sim/cpuStore';
 import { Simulation } from '../src/sim/simulation';
@@ -190,6 +190,18 @@ describe('block updates', () => {
     expect(rest.slice(0, lastFocused + 1).every((c) => c.cx >= 3)).toBe(true);
     expect(rest.slice(lastFocused + 1).some((c) => c.cx >= 3)).toBe(false);
     expect(order.length).toBe(81);
+  });
+
+  it('leave pastel concrete as it is (solid, keeps its colour, holds up water)', async () => {
+    const world = newWorld(1, 2);
+    world.recenter(8, 8);
+    fill(world);
+    const sim = new Simulation(world);
+    world.setCell(8, 10, 8, concrete(5));
+    world.setCell(8, 11, 8, cell(Block.Water, SOURCE_LEVEL));
+    await settle(sim);
+    expect(await world.readCell(8, 10, 8)).toBe(concrete(5));
+    expect(await blockAt(world, 8, 11, 8)).toBe(Block.Water);
   });
 
   it('wake chunks that come into the active area next to an edited one', async () => {
