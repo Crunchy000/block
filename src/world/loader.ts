@@ -1,20 +1,25 @@
 import { GEN_BATCH, generateChunksTensor } from '../tf/worldgen';
 import type { World } from './world';
 
+/** Chunks per batch for the worldgen shader (TF.js batches stay at GEN_BATCH). */
+export const SHADER_BATCH = 64;
+
 /**
- * Generate the nearest missing chunks (up to GEN_BATCH) and write them into their store
+ * Generate the nearest missing chunks (up to SHADER_BATCH or GEN_BATCH) and write them into their store
  * slots: with the GPU store's worldgen shader when the world lives on the GPU, else as one
  * TF.js batch (`viaTensorflow` forces that; the GPU tests compare the two). Resolves to
  * how many chunks it generated.
  */
 export async function generateMissing(world: World, seed?: number, viaTensorflow = false): Promise<number> {
-  const chunks = world.missingChunks(GEN_BATCH);
+  // The worldgen shader is cheap enough for bigger batches (a quarter of a ms a chunk or so).
+  const generate = viaTensorflow ? undefined : world.store.generate?.bind(world.store);
+  const chunks = world.missingChunks(generate ? SHADER_BATCH : GEN_BATCH);
   if (chunks.length === 0) return 0;
   world.markGenerating(chunks);
   // The GPU store generates straight into its slots, in one compute shader.
-  if (world.store.generate && !viaTensorflow) {
+  if (generate) {
     try {
-      world.store.generate(chunks.map(({ slot, cx, cz }) => ({ slot, cx, cz })), seed);
+      generate(chunks.map(({ slot, cx, cz }) => ({ slot, cx, cz })), seed);
     } catch (e) {
       world.markGenerated(chunks);
       throw e;

@@ -34,7 +34,10 @@ what the GPU's buffer limits hold: every loaded chunk's cells take 64 KB of one 
 at 64). Block updates run within 8 chunks at most (the simulation distance); further out chunks are drawn but frozen,
 as in Minecraft. Meshes are packed into one face buffer at their real size (a few thousand faces a chunk), only chunks
 in the camera's view are drawn, and depth is reversed with a float depth buffer so distant terrain stays steady. The
-game is playable as soon as the area around you is loaded; the distance keeps loading, nearest first.
+game is playable as soon as the area around you is loaded; the distance keeps loading, nearest first, and what
+the camera sees before the rest (so flying forward fills in what's ahead). Generated terrain is settled, so new
+chunks don't wake for block updates unless they or a neighbour were edited: moving costs only generating and
+meshing. Flying is 20 blocks a second, sprinting 80.
 
 **Far terrain** (mist by default; silhouette, colour or off on the start screen, or `?far=silhouette` and so on): beyond the chunks, the land
 is drawn out to 2 km as one low-detail height field, in the spirit of Distant Horizons' level-of-detail chunks. The

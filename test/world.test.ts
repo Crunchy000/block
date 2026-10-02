@@ -166,11 +166,50 @@ describe('block updates', () => {
     world.recenter(8, 8);
     fill(world);
     const sim = new Simulation(world);
-    expect(await sim.tick()).toBe(true); // freshly loaded chunks are awake
+    // Generated terrain is settled, so fresh chunks don't even wake.
+    expect(await sim.tick()).toBe(false);
+    expect(sim.asleep).toBe(true);
+    // Woken anyway, a tick changes nothing and they go back to sleep.
+    world.wake([...world.chunks.values()].filter((c) => c.state === 'active'));
+    expect(await sim.tick()).toBe(true);
     expect(sim.lastBatch).toBe(9); // all 3x3 active chunks
     expect(sim.lastChangedChunks).toBe(0);
     expect(await sim.tick()).toBe(false);
-    expect(sim.asleep).toBe(true);
+  });
+
+  it('generate the simulated area first, then chunks in focus, then the rest, nearest first', () => {
+    const world = newWorld(1, 4);
+    world.recenter(8, 8);
+    world.focus = (cx) => cx >= 3; // the camera looks east
+    const order = world.missingChunks(1000);
+    const near = (c: { cx: number; cz: number }) => Math.max(Math.abs(c.cx), Math.abs(c.cz)) <= 2;
+    const firstFar = order.findIndex((c) => !near(c));
+    expect(order.slice(0, firstFar).every(near)).toBe(true);
+    const rest = order.slice(firstFar);
+    const lastFocused = rest.map((c) => c.cx >= 3).lastIndexOf(true);
+    expect(rest.slice(0, lastFocused + 1).every((c) => c.cx >= 3)).toBe(true);
+    expect(rest.slice(lastFocused + 1).some((c) => c.cx >= 3)).toBe(false);
+    expect(order.length).toBe(81);
+  });
+
+  it('wake chunks that come into the active area next to an edited one', async () => {
+    const world = newWorld(1, 2);
+    world.recenter(8, 8);
+    fill(world);
+    const sim = new Simulation(world);
+    world.setCell(CHUNK_SIZE + 15, 4, 8, cell(Block.Stone)); // chunk (1, 0), at its east border
+    await settle(sim);
+    // Move one chunk east: chunk (2, 0) becomes active beside the edited chunk, so it wakes;
+    // the pristine chunks coming in elsewhere don't.
+    world.recenter(CHUNK_SIZE + 8, 8);
+    fill(world);
+    expect(world.getChunk(2, 0)!.state).toBe('active');
+    const awake = world.takeAwake().map((c) => c.key).sort();
+    expect(awake).toContain(world.getChunk(2, 0)!.key);
+    expect(awake.every((k) => {
+      const c = world.chunks.get(k)!;
+      return Math.abs(c.cx - 1) <= 1 && Math.abs(c.cz) <= 1;
+    })).toBe(true);
   });
 
   it('only simulate the chunk around an edit, then sleep again once settled', async () => {

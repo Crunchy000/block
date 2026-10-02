@@ -66,6 +66,12 @@ export class World {
   private readonly toMesh = new Set<Chunk>();
   /** A meshing round in flight (GPU meshing reads counts back between its passes). */
   meshing?: Promise<void>;
+  /**
+   * Chunks the camera sees (main.ts sets this each frame): generated and meshed before the
+   * rest, so flying forward fills in what's ahead first. The simulated area and the ring
+   * around it always come first, whatever the camera sees.
+   */
+  focus?: (cx: number, cz: number) => boolean;
   private loadedCount = 0;
   /** Offsets within the halo, nearest first (the order chunks are generated in). */
   private readonly spiral: Array<[number, number]>;
@@ -189,8 +195,9 @@ export class World {
   private setState(chunk: Chunk, state: ChunkState): void {
     if (chunk.state === state) return;
     chunk.state = state;
-    // Outside the active area a chunk is frozen; once active it may have updates to catch up on.
-    if (state === 'active') this.awake.add(chunk);
+    // Outside the active area a chunk is frozen; once active it may have updates to catch up on
+    // (if it or a neighbour was changed: generated terrain is settled).
+    if (state === 'active' && this.unsettled(chunk)) this.awake.add(chunk);
   }
 
   /** Chebyshev distance in chunks from the window centre. */
@@ -198,17 +205,24 @@ export class World {
     return Math.max(Math.abs(cx - this.window.cx), Math.abs(cz - this.window.cz));
   }
 
-  /** Chunks in the halo that need generating, nearest first. */
+  /** Chunks in the halo that need generating: nearest first, those in focus before the rest. */
   missingChunks(limit: number): Chunk[] {
-    const out: Chunk[] = [];
+    const out: Chunk[] = [], later: Chunk[] = [];
     if (this.loadedCount === this.chunks.size) return out;
     const { cx, cz } = this.window;
     for (const [dx, dz] of this.spiral) {
       const c = this.getChunk(cx + dx, cz + dz);
-      if (c && !c.loaded && !c.loading) out.push(c);
+      if (!c || c.loaded || c.loading) continue;
+      if (this.first(c)) out.push(c);
+      else if (later.length < limit) later.push(c);
       if (out.length >= limit) break;
     }
-    return out;
+    return out.concat(later).slice(0, limit);
+  }
+
+  /** In the simulated area or the ring around it, or in focus. */
+  private first(c: Chunk): boolean {
+    return this.distance(c.cx, c.cz) <= this.activeRadius + 1 || (this.focus?.(c.cx, c.cz) ?? true);
   }
 
   /** Chunks are being generated: don't hand them out again. */
@@ -242,10 +256,30 @@ export class World {
     chunk.loading = false;
     this.touch(chunk);
     this.store.setSlot(chunk.slot, chunk.cx, chunk.cz, true);
-    // Fresh terrain may not be settled, and its neighbours now have new border data.
-    this.awake.add(chunk);
+    // Its side neighbours' meshes see its border. Generated terrain is settled, so block
+    // updates only wake where edits are: this chunk if it or a neighbour was changed, and
+    // changed neighbours (their water may now flow in).
+    if (this.unsettled(chunk)) this.awake.add(chunk);
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue;
+        const n = this.getChunk(chunk.cx + dx, chunk.cz + dz);
+        if (!n) continue;
+        if (!dx || !dz) {
+          n.version++;
+          this.touch(n);
+        }
+        if (chunk.modified || n.modified) this.awake.add(n);
+      }
+    }
+  }
+
+  /** It or a neighbour was changed since generation, so it may have block updates to run. */
+  private unsettled(chunk: Chunk): boolean {
+    if (chunk.modified) return true;
     for (let dz = -1; dz <= 1; dz++)
-      for (let dx = -1; dx <= 1; dx++) if (dx || dz) this.neighbourChanged(chunk.cx + dx, chunk.cz + dz, !dx || !dz);
+      for (let dx = -1; dx <= 1; dx++) if (this.getChunk(chunk.cx + dx, chunk.cz + dz)?.modified) return true;
+    return false;
   }
 
   /** True once every chunk in the halo is loaded. */
@@ -351,7 +385,7 @@ export class World {
   }
 
   /**
-   * Mesh chunks in view whose cells changed, nearest first, up to the store's budget per
+   * Mesh chunks in view whose cells changed, nearest first (those in focus before the rest), up to the store's budget per
    * round, one round at a time (GPU meshing reads counts back mid-way). A chunk waits for
    * its four side neighbours, so border faces cull correctly. Returns how many it started.
    */
@@ -365,7 +399,8 @@ export class World {
       else if (c.loaded && loaded(c.cx + 1, c.cz) && loaded(c.cx - 1, c.cz) && loaded(c.cx, c.cz + 1) && loaded(c.cx, c.cz - 1)) todo.push(c);
     }
     if (todo.length === 0) return 0;
-    todo.sort((a, b) => (a.cx - cx) ** 2 + (a.cz - cz) ** 2 - ((b.cx - cx) ** 2 + (b.cz - cz) ** 2));
+    const rank = (c: Chunk) => (c.cx - cx) ** 2 + (c.cz - cz) ** 2 + (this.first(c) ? 0 : 1e9);
+    todo.sort((a, b) => rank(a) - rank(b));
     todo.length = Math.min(todo.length, this.store.meshBudget);
     const jobs = todo.map((c) => {
       c.meshedVersion = c.version;

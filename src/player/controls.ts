@@ -7,11 +7,15 @@ const MAX_PITCH = 1.55;
  * Free-flying first-person camera. Played either with mouse + keyboard (pointer
  * lock) or, on touch screens, through TouchControls, which feeds the touch* fields.
  */
+/** Sprinting moves this many times faster. */
+const SPRINT = 4;
+
 export class Controls {
   position: [number, number, number];
   yaw = Math.PI * 0.75;
   pitch = -0.35;
-  speed = 12;
+  /** Blocks a second; sprinting (Ctrl, or a double-tapped stick) is SPRINT times that. */
+  speed = 20;
   /** Mouse captured (pointer lock). */
   locked = false;
   /** Playing with on-screen touch controls instead of pointer lock. */
@@ -137,7 +141,7 @@ export class Controls {
     const len = Math.hypot(right, fwd, up);
     if (len === 0) return;
     const sprint = k.has('ControlLeft') || this.touchSprint;
-    const s = (this.speed * (sprint ? 3 : 1) * dt) / Math.max(1, len);
+    const s = (this.speed * (sprint ? SPRINT : 1) * dt) / Math.max(1, len);
     const sin = Math.sin(this.yaw), cos = Math.cos(this.yaw);
     // forward = (-sin, 0, -cos), right = (cos, 0, -sin)
     this.position[0] += (-sin * fwd + cos * right) * s;

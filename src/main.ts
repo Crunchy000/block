@@ -398,6 +398,8 @@ async function main(): Promise<void> {
     // Only chunks the camera can see.
     const inView = frustum(viewProj);
     const draws = world.draws((x, z) => inView([x * CHUNK_SIZE, 0, z * CHUNK_SIZE], [(x + 1) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 1) * CHUNK_SIZE]));
+    // Load and mesh what's ahead first: chunks the camera sees, and a chunk around them (their neighbours, for meshing).
+    world.focus = (x, z) => inView([(x - 1) * CHUNK_SIZE, 0, (z - 1) * CHUNK_SIZE], [(x + 2) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 2) * CHUNK_SIZE]);
     const { cx: wcx, cz: wcz } = world.window, vr = world.viewRadius;
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws, far?.ready ? {
       vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE, look: farLook as 'mist' | 'silhouette' | 'colour', extent: far.extent,
