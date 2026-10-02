@@ -449,7 +449,7 @@ async function main(): Promise<void> {
     const centre = target?.block.map((v) => v + 0.5);
     if (digging.progress > 0 && target && (digTick -= dt) <= 0) {
       sounds.dig(target.type, centre!);
-      digTick = 0.2;
+      digTick = 0.3;
     }
     if (digging.step(dt, controls.digging, target?.block, target?.type) && target) {
       sounds.breakBlock(target.type, centre!);

@@ -1,13 +1,14 @@
 import { Block } from '../constants';
 
 /**
- * Sound effects, through the Web Audio API. Animal calls, a block breaking (diamond ore
- * shattering), picking up a diamond, footsteps (on grass, sand, gravel and stone, and
- * wading) and splashing into water are short recordings (public/sounds/*.mp3, played at
- * slightly varied pitch so repeats differ; several pick one of a few takes); the rest is
- * made on the spot from noise and tones: digging scrapes, placing a block and landing (a
- * soft thud), and the recorded ones too should a file fail to load. The footsteps, diamond
- * and pickup sounds are from AntumDeluge's "sounds" for Luanti: see assets/sounds/CREDITS.md.
+ * Sound effects, through the Web Audio API. Animal calls, digging (a pickaxe on stone, a
+ * scrape in soft ground), a block breaking, picking up a diamond, footsteps (on grass, sand,
+ * gravel and stone, and wading) and splashing into water are short recordings
+ * (public/sounds/*.mp3, played at slightly varied pitch so repeats differ; several pick one
+ * of a few takes); the rest is made on the spot from noise and tones: placing a block and
+ * landing (a soft thud), and the recorded ones too should a file fail to load. The digging,
+ * footstep and pickup sounds are from AntumDeluge's "sounds" for Luanti: see
+ * assets/sounds/CREDITS.md.
  *
  * Sounds at a place in the world get quieter with distance and pan left or right of where
  * the player faces. Browsers only let a page start sound from a click or tap, so the audio
@@ -27,7 +28,7 @@ const STEPS = { grass: 3, hard: 2, sand: 1, gravel: 4, water: 3 };
 type StepKind = keyof typeof STEPS;
 /** Every recording to load. */
 const FILES = [
-  'cow', 'pig', 'sheep', 'chicken', 'break', 'diamond-break-1', 'diamond-break-2', 'diamond-break-3', 'pickup',
+  'cow', 'pig', 'sheep', 'chicken', 'break', 'dig-hard-1', 'dig-hard-2', 'dig-hard-3', 'dig-soft-1', 'pickup',
   ...Object.entries(STEPS).flatMap(([kind, n]) => Array.from({ length: n }, (_, i) => `step-${kind}-${i + 1}`)),
 ];
 /** Sounds further away than this aren't heard. */
@@ -159,9 +160,12 @@ export class Sounds {
     osc.stop(t + o.seconds + 0.02);
   }
 
-  /** One scrape of digging at a block (repeated while digging). */
+  /** One hit of digging at a block (repeated while digging): a pickaxe on stone and ore, a scrape in soft ground. */
   dig(type: Block, at: readonly number[]): void {
     const hard = type === Block.Stone || type === Block.Diamond;
+    const take = hard ? `dig-hard-${1 + Math.floor(Math.random() * 3)}` : 'dig-soft-1';
+    if (this.sample(take, hard ? 0.3 : 0.35, 0.92 + Math.random() * 0.16, at)) return;
+    // (Not loaded: a synthesised scrape.)
     this.burst({ volume: 0.35, seconds: 0.07, filter: hard ? 'bandpass' : 'lowpass', freq: hard ? 2400 + Math.random() * 600 : 900 + Math.random() * 300, q: hard ? 1.6 : 0.7, at });
     if (type === Block.Diamond) this.tone({ volume: 0.05, seconds: 0.08, from: 2600, to: 2400, type: 'triangle', at });
   }
@@ -195,13 +199,9 @@ export class Sounds {
     return this.sample(`step-${kind}-${n}`, volume, 0.92 + Math.random() * 0.16, undefined, seconds);
   }
 
-  /**
-   * A block breaking: the recorded crunch, higher for stone; diamond ore shatters like glass
-   * (one of three takes). Or, not loaded, a synthesised crunch and thump.
-   */
+  /** A block breaking: the recorded crunch, higher for stone and ore (or a synthesised crunch and thump). */
   breakBlock(type: Block, at: readonly number[]): void {
     const hard = type === Block.Stone || type === Block.Diamond;
-    if (type === Block.Diamond && this.sample(`diamond-break-${1 + Math.floor(Math.random() * 3)}`, 0.6, 0.95 + Math.random() * 0.1, at)) return;
     if (this.sample('break', 0.8, (hard ? 1.1 : 0.85) * (0.95 + Math.random() * 0.1), at)) return;
     this.burst({ volume: 0.5, seconds: 0.18, filter: 'lowpass', freq: hard ? 3000 : 1400, sweepTo: 300, at });
     this.tone({ volume: 0.35, seconds: 0.12, from: hard ? 160 : 120, to: 60, at });

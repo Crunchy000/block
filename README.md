@@ -51,15 +51,14 @@ or if they fail to, blocks keep the earlier procedural look. Block edges get 4×
 
 **Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono)
 for animal calls (cows, pigs, sheep and chickens now and then, the horse borrowing the cow's higher; louder and
-higher when hit), a block breaking (higher for stone; diamond ore shatters like glass), picking up a diamond (a
-coin chime), footsteps every 2.5 blocks (on grass and dirt, sand, gravel, and stone, concrete and ore, and wading
+higher when hit), digging (a pickaxe on stone and ore, a scrape in soft ground), a block breaking (higher for
+stone), picking up a diamond (a coin chime), footsteps every 2.5 blocks (on grass and dirt, sand, gravel, and stone, concrete and ore, and wading
 through water) and splashing into water, each at a slightly varied pitch, several picking one of a few takes, so
 repeats differ. Those but the animals and the crunch are from AntumDeluge's
 [sounds](https://content.luanti.org/packages/AntumDeluge/sounds/) for Luanti, by several authors (CC0, CC BY 3.0
 and CC BY-SA 3.0: credited on the start screen, and per file in `assets/sounds/CREDITS.md`, with the originals in
 `assets/sounds/luanti/`). Sounds fade with distance and pan left or right of where you face. Synthesised on the
-spot from noise and tones: digging scrapes (dirt soft, stone sharp, diamond ore with a ping), placing a block and
-a soft thud for landing from a fall (and the recorded ones, until they load). `N` or the touch Sounds button
+spot from noise and tones: placing a block and a soft thud for landing from a fall (and the recorded ones, until they load). `N` or the touch Sounds button
 switch them off (remembered).
 
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
