@@ -412,7 +412,14 @@ export class World {
       };
     });
     const round = this.store.mesh(jobs, target).then(() => {
-      for (const job of jobs) if (job.current()) this.getChunk(job.cx, job.cz)!.meshReady = true;
+      for (const job of jobs) {
+        if (!job.current()) continue;
+        const chunk = this.getChunk(job.cx, job.cz)!;
+        if (chunk.meshReady) continue; // a remesh (an edit): already shown
+        chunk.meshReady = true;
+        chunk.shownAt = performance.now();
+        target?.shown?.(job.meshSlot, chunk.shownAt);
+      }
     }, (e: unknown) => {
       for (const c of todo) { c.meshedVersion = -1; this.touch(c); } // try again
       throw e;
@@ -430,6 +437,22 @@ export class World {
       out.push({ meshSlot: c.meshSlot, center: [(c.cx + 0.5) * CHUNK_SIZE, CHUNK_HEIGHT / 2, (c.cz + 0.5) * CHUNK_SIZE] });
     }
     return out;
+  }
+
+  /**
+   * Which chunks in view are drawn and fully faded in (`fadeMs` after first shown), as a
+   * square of bytes (255 covered, 0 not), row by row from chunk (x0, z0): where the far
+   * terrain stops being drawn.
+   */
+  coverage(now: number, fadeMs: number): { x0: number; z0: number; size: number; data: Uint8Array<ArrayBuffer> } {
+    const r = this.viewRadius, size = 2 * r + 1, x0 = this.window.cx - r, z0 = this.window.cz - r;
+    const data = new Uint8Array(size * size);
+    for (const c of this.inView) {
+      if (!c.meshReady || now - c.shownAt < fadeMs) continue;
+      const x = c.cx - x0, z = c.cz - z0;
+      if (x >= 0 && z >= 0 && x < size && z < size) data[z * size + x] = 255;
+    }
+    return { x0, z0, size, data };
   }
 
   /** Chunks simulated, in view, and loaded as the halo, for the HUD. */

@@ -21,6 +21,8 @@ export class Chunk {
   meshSlot = -1;
   /** Its mesh is in its mesh slot (drawn while in view). */
   meshReady = false;
+  /** When (performance.now(), ms) its mesh was first drawn since it came into view: it fades in from then. */
+  shownAt = 0;
   /** Edited or simulated since generation: saved when it leaves the halo, restored when it comes back. */
   modified = false;
 

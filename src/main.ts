@@ -13,6 +13,7 @@ import { ClassicMeshes } from './render/classicMeshes';
 import { MeshPool } from './render/meshPool';
 import { loadMobModel, type MobModel } from './render/mobModel';
 import { Renderer } from './render/renderer';
+import { FADE_MS } from './render/shaders';
 import { checkGpuStore } from './sim/check';
 import { CpuStore } from './sim/cpuStore';
 import { GpuStore } from './sim/gpuStore';
@@ -580,10 +581,10 @@ async function main(): Promise<void> {
     const draws = world.draws((x, z) => inView([x * CHUNK_SIZE, 0, z * CHUNK_SIZE], [(x + 1) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 1) * CHUNK_SIZE]));
     // Load and mesh what's ahead first: chunks the camera sees, and a chunk around them (their neighbours, for meshing).
     world.focus = (x, z) => inView([(x - 1) * CHUNK_SIZE, 0, (z - 1) * CHUNK_SIZE], [(x + 2) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 2) * CHUNK_SIZE]);
-    const { cx: wcx, cz: wcz } = world.window, vr = world.viewRadius;
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws, far?.ready ? {
       vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE, look: farLook as 'mist' | 'silhouette' | 'colour', extent: far.extent,
-      near: [(wcx - vr) * CHUNK_SIZE, (wcz - vr) * CHUNK_SIZE, (wcx + vr + 1) * CHUNK_SIZE, (wcz + vr + 1) * CHUNK_SIZE],
+      // Safe mode draws chunks without fading them in.
+      coverage: world.coverage(performance.now(), safe ? 0 : FADE_MS),
     } : undefined, [...animals.instances()].map(([name, instances]) => ({ model: animalModels.get(name)!, instances })));
 
     const saved = world.savedCount(), counts = world.counts();

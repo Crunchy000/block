@@ -69,6 +69,8 @@ export interface StagedChunks {
 /** Where meshes go: GPU mesh slots (MeshPool), or CPU-built buffers in safe mode (ClassicMeshes). */
 export interface MeshTarget {
   upload(slot: number, cx: number, cz: number, faces: ChunkFaces): void;
+  /** A chunk's mesh is drawn for the first time since it came into view, at `ms` (it fades in from then). */
+  shown?(slot: number, ms: number): void;
 }
 
 export interface MeshJob {

@@ -17,8 +17,11 @@ export interface FarDraw {
   vertex: GPUBuffer;
   index: GPUBuffer;
   indexCount: number;
-  /** x0, z0, x1, z1: the area the real chunks cover, where the far terrain isn't drawn. */
-  near: [number, number, number, number];
+  /**
+   * Which chunks are drawn and fully faded in (world.coverage): the far terrain isn't drawn
+   * there. Chunks still loading or fading in keep it underneath, so there are no holes.
+   */
+  coverage: { x0: number; z0: number; size: number; data: Uint8Array<ArrayBuffer> };
   /** The y of the sea's surface. */
   seaY: number;
   /** How it looks: mist (a little darker than the fog), a dark silhouette, or colours. */
@@ -76,7 +79,9 @@ export class Renderer {
   private lineBuffer?: GPUBuffer;
   private farPipeline!: GPURenderPipeline;
   private farUniforms!: GPUBuffer;
-  private farGroup!: GPUBindGroup;
+  private farGroup?: GPUBindGroup;
+  private farLayout!: GPUBindGroupLayout;
+  private coverage?: GPUTexture;
   private mobPipeline!: GPURenderPipeline;
   private mobLayout!: GPUBindGroupLayout;
   private readonly mobGroups = new Map<GPUTexture, GPUBindGroup>();
@@ -174,12 +179,12 @@ export class Renderer {
     });
     // Far terrain: its own small uniform block beside the shared one; plain vertex buffers, so safe mode draws it too.
     this.farUniforms = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const farLayout = device.createBindGroupLayout({
-      entries: [uniformEntry, { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: {} }],
-    });
-    this.farGroup = device.createBindGroup({
-      layout: farLayout,
-      entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }, { binding: 1, resource: { buffer: this.farUniforms } }],
+    const farLayout = this.farLayout = device.createBindGroupLayout({
+      entries: [
+        uniformEntry,
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float' } },
+      ],
     });
     const farModule = device.createShaderModule({ label: 'far terrain', code: farShader });
     this.farPipeline = device.createRenderPipeline({
@@ -367,7 +372,24 @@ export class Renderer {
         }
       }
     }
-    if (far) device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([...far.near, far.seaY, ['colour', 'silhouette', 'mist'].indexOf(far.look), far.extent, 0]));
+    if (far) {
+      const { x0, z0, size, data } = far.coverage;
+      device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([x0 * 16, z0 * 16, size, 0, far.seaY, ['colour', 'silhouette', 'mist'].indexOf(far.look), far.extent, 0]));
+      // The coverage map: one byte a chunk, re-made when its size changes.
+      if (!this.coverage || this.coverage.width !== size) {
+        this.coverage?.destroy();
+        this.coverage = device.createTexture({ label: 'chunk coverage', size: [size, size], format: 'r8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+        this.farGroup = device.createBindGroup({
+          layout: this.farLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.uniformBuffer } },
+            { binding: 1, resource: { buffer: this.farUniforms } },
+            { binding: 2, resource: this.coverage.createView() },
+          ],
+        });
+      }
+      device.queue.writeTexture({ texture: this.coverage }, data, { bytesPerRow: size }, [size, size]);
+    }
 
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
@@ -402,7 +424,7 @@ export class Renderer {
 
     if (far) {
       pass.setPipeline(this.farPipeline);
-      pass.setBindGroup(0, this.farGroup);
+      pass.setBindGroup(0, this.farGroup!);
       pass.setVertexBuffer(0, far.vertex);
       pass.setIndexBuffer(far.index, 'uint32');
       pass.drawIndexed(far.indexCount);

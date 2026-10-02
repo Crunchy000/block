@@ -204,6 +204,29 @@ describe('block updates', () => {
     expect(await blockAt(world, 8, 11, 8)).toBe(Block.Water);
   });
 
+  it('report chunks shown once (not again on a remesh), covered once faded in', async () => {
+    const world = newWorld(1, 2);
+    world.recenter(8, 8);
+    fill(world);
+    const shown: number[] = [];
+    const target = { upload: () => {}, shown: (slot: number) => { shown.push(slot); } };
+    while (world.remesh(target) > 0) await world.meshing;
+    const inView = [...world.chunks.values()].filter((c) => c.meshReady);
+    expect(inView).toHaveLength(9); // view radius 1 (the halo's edge has no neighbours to mesh against)
+    expect(shown.sort()).toEqual(inView.map((c) => c.meshSlot).sort());
+    // Covered only once fully faded in; no fade (safe mode) covers at once.
+    const now = performance.now();
+    expect(world.coverage(now, 600).data.every((v) => v === 0)).toBe(true);
+    const later = world.coverage(now + 1000, 600);
+    expect(later.size).toBe(3);
+    expect(Array.from(later.data)).toEqual(Array(9).fill(255));
+    expect(Array.from(world.coverage(now, 0).data)).toEqual(Array(9).fill(255));
+    // An edit remeshes a chunk without showing (fading) it again.
+    world.setCell(8, 5, 8, cell(Block.Air));
+    while (world.remesh(target) > 0) await world.meshing;
+    expect(shown).toHaveLength(9);
+  });
+
   it('wake chunks that come into the active area next to an edited one', async () => {
     const world = newWorld(1, 2);
     world.recenter(8, 8);

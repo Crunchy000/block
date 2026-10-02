@@ -118,7 +118,8 @@ export class MeshPool {
   commit(slot: number, cx: number, cz: number, mesh: ChunkMesh): void {
     this.release(slot);
     this.meshes[slot] = mesh;
-    this.device.queue.writeBuffer(this.origins, slot * 16, new Int32Array([cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE, 0]));
+    // (x, y, z; w is when it was first shown, set by shown().)
+    this.device.queue.writeBuffer(this.origins, slot * 16, new Int32Array([cx * CHUNK_SIZE, 0, cz * CHUNK_SIZE]));
   }
 
   /** Free a reserved mesh that never became current. */
@@ -161,6 +162,11 @@ export class MeshPool {
     };
     const [opaque, water] = await Promise.all([part(mesh.opaque), part(mesh.water)]);
     return { opaque, water };
+  }
+
+  /** When a slot's chunk was first shown (ms; the block shader fades it in from then). */
+  shown(slot: number, ms: number): void {
+    this.device.queue.writeBuffer(this.origins, slot * 16 + 12, new Int32Array([Math.floor(ms)]));
   }
 
   destroy(): void {

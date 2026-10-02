@@ -1,6 +1,9 @@
 import { Block, CONCRETE_COLOURS, FALLING_LEVEL, SOURCE_LEVEL } from '../constants';
 import { FACE_CORNERS, FACE_NORMALS, FULL_HEIGHT, Face, PLANT_QUADS } from './mesher';
 
+/** How long a newly arrived chunk takes to fade in. */
+export const FADE_MS = 600;
+
 const uniforms = /* wgsl */ `
 struct Uniforms {
   viewProj: mat4x4f,
@@ -33,6 +36,7 @@ struct VSOut {
   @location(0) world: vec3f,
   @location(1) normal: vec3f,
   @location(2) @interpolate(flat) kind: u32,
+  @location(3) @interpolate(flat) fade: f32, // 0..1 as a newly arrived chunk fades in
 };
 
 fn fluidHeight(code: u32) -> f32 {
@@ -86,6 +90,8 @@ fn faceVertex(record: u32, slot: u32, vertex: u32) -> VSOut {
   o.world = pos;
   o.normal = normal;
   o.kind = kind;
+  // origin.w: when the chunk was first shown (ms); it fades in over ${FADE_MS} ms from then.
+  o.fade = clamp((u.camPos.w * 1000.0 - f32(origin.w)) / ${FADE_MS}.0, 0.0, 1.0);
   return o;
 }
 
@@ -120,6 +126,13 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   }
   n = clamp(n, 0.0, 1.0);
   let blur = clamp(lod, 0.0, 1.0); // texel-sized details (grass fringe, diamond gems) average out from lod 0 to 1
+  // A newly arrived chunk dissolves in: each pixel appears once the fade passes its place in a
+  // 4x4 ordered-dither pattern, so it blends over the far terrain without sorting.
+  if (in.fade < 1.0) {
+    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let p = vec2u(in.pos.xy) % vec2u(4u);
+    if (in.fade <= (bayer[p.y * 4u + p.x] + 0.5) / 16.0) { discard; }
+  }
   let t = u.camPos.w;
 
   var base: vec3f;
@@ -202,10 +215,12 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 export const farShader = /* wgsl */ `
 ${uniforms}
 struct Far {
-  near: vec4f,   // xz min, xz max of the area the real chunks cover
+  near: vec4f,   // x, z of the coverage map's first chunk (in blocks), its size in chunks
   sea: vec4f,    // x = y of the sea's surface, y = look (0 colours, 1 silhouette, 2 mist), z = how far it reaches
 };
 @group(0) @binding(1) var<uniform> far: Far;
+// Per chunk in view: 1 where the real chunk is drawn and fully faded in (no far terrain there).
+@group(0) @binding(2) var coverage: texture_2d<f32>;
 
 struct VSOut {
   @builtin(position) pos: vec4f,
@@ -215,7 +230,8 @@ struct VSOut {
 @vertex
 fn vs(@location(0) pos: vec3f) -> VSOut {
   var o: VSOut;
-  o.pos = u.viewProj * vec4f(pos, 1.0);
+  // A little lower than the blocks, so a chunk fading in over it doesn't flicker against it.
+  o.pos = u.viewProj * vec4f(pos - vec3f(0.0, 0.3, 0.0), 1.0);
   o.world = pos;
   return o;
 }
@@ -232,7 +248,8 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   let span = max(length(dpdx(in.world.xz)), length(dpdy(in.world.xz))) / 4.0;
   let blur = clamp((span - 0.6) / 1.4, 0.0, 1.0);
   if (normal.y < 0.0) { normal = -normal; }
-  if (all(in.world.xz >= far.near.xy) && all(in.world.xz < far.near.zw)) { discard; }
+  let c = vec2i(floor((in.world.xz - far.near.xy) / 16.0));
+  if (all(c >= vec2i(0)) && all(c < vec2i(i32(far.near.z))) && textureLoad(coverage, c, 0).r > 0.5) { discard; }
 
   let dist = distance(in.world, u.camPos.xyz);
   let sun = normalize(vec3f(0.4, 0.85, 0.3));
@@ -259,8 +276,11 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 
   var fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, u.fogCap.x);
   if (far.sea.y > 1.5) {
-    // Mist: as thick as the chunks' capped fog at their edge, thinning to plain sky at the far edge.
-    fog = max(fog, mix(u.fogCap.x, 1.0, sqrt(clamp(dist / far.sea.z, 0.0, 1.0))));
+    // Mist: as thick as the chunks' capped fog at their edge, thinning to plain sky at the far
+    // edge; nearer than their edge (where it shows while chunks load and fade in), only as
+    // foggy as they are there.
+    let mist = mix(u.fogCap.x, 1.0, sqrt(clamp(dist / far.sea.z, 0.0, 1.0)));
+    fog = max(fog, mist * fog / u.fogCap.x);
   }
   lit = mix(lit, u.sky.rgb, fog);
   return vec4f(lit, 1.0);
@@ -354,6 +374,7 @@ struct VSOut {
   @location(0) world: vec3f,
   @location(1) normal: vec3f,
   @location(2) @interpolate(flat) kind: u32,
+  @location(3) @interpolate(flat) fade: f32, // 0..1 as a newly arrived chunk fades in
 };
 
 @vertex
@@ -368,6 +389,7 @@ fn vs(@location(0) pos: vec3f, @location(1) normal: vec3f, @location(2) kind: f3
   o.world = pos;
   o.normal = normal;
   o.kind = u32(kind + 0.5);
+  o.fade = 1.0; // (safe mode: chunks appear without fading)
   return o;
 }
 
@@ -397,6 +419,13 @@ fn fs(in: VSOut) -> @location(0) vec4f {
   }
   n = clamp(n, 0.0, 1.0);
   let blur = clamp(lod, 0.0, 1.0); // texel-sized details (grass fringe, diamond gems) average out from lod 0 to 1
+  // A newly arrived chunk dissolves in: each pixel appears once the fade passes its place in a
+  // 4x4 ordered-dither pattern, so it blends over the far terrain without sorting.
+  if (in.fade < 1.0) {
+    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let p = vec2u(in.pos.xy) % vec2u(4u);
+    if (in.fade <= (bayer[p.y * 4u + p.x] + 0.5) / 16.0) { discard; }
+  }
   let t = u.camPos.w;
 
   var base: vec3f;

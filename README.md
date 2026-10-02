@@ -101,7 +101,7 @@ needs no chunks: it samples the formula on a grid around you (points 4 blocks ap
 about 37,000 in all, 1.3 MB), recentred every 64 blocks you travel. In mist the chunks fade into the fog as usual
 but the fog stops 85% thick, and the far terrain carries on from there, thinning into the sky toward its edge: faint
 hills and coastlines through the haze. The other looks are a near-black silhouette that hazes into the sky, and
-plain colour (grass, bare slopes and sea with the blocks' lighting, fog pushed out to 2 km). It isn't drawn where real chunks are. It has no caves, plants or edits, only the shape of
+plain colour (grass, bare slopes and sea with the blocks' lighting, fog pushed out to 2 km). It isn't drawn where real chunks are drawn and faded in (a one-byte-a-chunk coverage map): chunks still loading leave it in place, so the edge of the loaded area never shows sky. A chunk that arrives dissolves in over it in 0.6 s (pixels appearing in a 4 × 4 ordered-dither pattern, so no sorting), the far terrain sitting 0.3 blocks lower so the two don't flicker against each other; edits don't fade again. It has no caves, plants or edits, only the shape of
 the land, and plain vertex buffers, so safe mode shows it too (`src/world/farTerrain.ts`).
 
 **Safe mode** (`?safe`, linked from the start screen): the world on the CPU and the previous renderer (meshes built
