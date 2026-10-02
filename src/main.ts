@@ -11,6 +11,7 @@ import type { RayHit } from './player/raycast';
 import { fpsView, frustum, multiply, perspective } from './render/math';
 import { ClassicMeshes } from './render/classicMeshes';
 import { MeshPool } from './render/meshPool';
+import { loadBlockTextures } from './render/blockTextures';
 import { loadMobModel, type MobModel } from './render/mobModel';
 import { Renderer } from './render/renderer';
 import { FADE_MS } from './render/shaders';
@@ -146,6 +147,10 @@ async function main(): Promise<void> {
   // 4x MSAA smooths block edges (?msaa=0 turns it off; safe mode keeps it off, to stay simple).
   const msaa = !safe && params.get('msaa') !== '0';
   const renderer = await Renderer.create(canvas, { offscreen: params.has('offscreen'), safe, msaa });
+  // Block textures ("Baunilha" by Mirtilo, CC BY-SA 4.0): until they load, or if they don't, blocks keep their procedural look.
+  loadBlockTextures(renderer.device)
+    .then((t) => renderer.setBlockTextures(t))
+    .catch((e: unknown) => logError('Loading the block textures failed (plain blocks instead)', e));
   log.info(`Antialiasing: ${msaa ? '4x MSAA' : 'off'}`);
   setStatus('Starting TensorFlow.js…');
   let tfBackend = await initTensorflow(renderer.device, renderer.adapterInfo);

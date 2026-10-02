@@ -3,7 +3,7 @@ import {
   Block, CHUNK_HEIGHT, CHUNK_SIZE, CONCRETE_COLOURS, SOURCE_LEVEL, WHEAT_RIPE, blockIndex, cell, concrete,
 } from '../src/constants';
 import {
-  FULL_HEIGHT, Face, faceQuad, fluidHeight, heightCode, meshFaces, packFace, unpackFace, wheatHeight,
+  FULL_HEIGHT, Face, faceQuad, fluidHeight, heightCode, meshFaces, packFace, unpackFace, WHEAT_HEIGHT,
 } from '../src/render/mesher';
 
 /** A 3x3-chunk area of flat stone up to y = 9; meshes the middle chunk. */
@@ -79,7 +79,7 @@ describe('meshFaces', () => {
     const plants = area.mesh().opaque.filter((r) => unpackFace(r).type === Block.Wheat);
     expect(plants.map((r) => unpackFace(r).face).sort()).toEqual([Face.PlantA, Face.PlantABack, Face.PlantB, Face.PlantBBack]);
     for (const q of quads(plants)) {
-      expect(Math.max(...q.corners.map((c) => c[1]))).toBeCloseTo(10 + wheatHeight(3));
+      expect(Math.max(...q.corners.map((c) => c[1]))).toBeCloseTo(10 + WHEAT_HEIGHT);
       expect(q.kind).toBe(Block.Wheat + 16 * 3);
     }
     // Front and back of each plane wind opposite ways (both are seen with back-face culling on).

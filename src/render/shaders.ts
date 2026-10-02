@@ -1,15 +1,167 @@
 import { Block, CONCRETE_COLOURS, FALLING_LEVEL, SOURCE_LEVEL } from '../constants';
+import { Layer } from './blockTextures';
 import { FACE_CORNERS, FACE_NORMALS, FULL_HEIGHT, Face, PLANT_QUADS } from './mesher';
+
+const INSET = PLANT_QUADS[0][0];
 
 /** How long a newly arrived chunk takes to fade in. */
 export const FADE_MS = 600;
+
+/**
+ * The block fragment shader (shared by the GPU-meshed and safe-mode pipelines), the block
+ * texture array and its sampler bound at `binding` and the next.
+ */
+const blockFragment = (binding: number) => /* wgsl */ `
+@group(0) @binding(${binding}) var blockTex: texture_2d_array<f32>;
+@group(0) @binding(${binding + 1}) var blockSampler: sampler;
+fn hash3(p: vec3f) -> f32 {
+  return fract(sin(dot(p, vec3f(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+// Which texture layer a face shows (Layer in render/blockTextures.ts), or -1 for none (concrete).
+fn layerFor(kind: u32, normal: vec3f, t: f32) -> i32 {
+  switch kind & 15u {
+    case 1u: { return select(-1, ${Layer.Stone}, (kind >> 4u) == 0u); }
+    case 2u: { return ${Layer.Dirt}; }
+    case 3u: { return ${Layer.Water} + i32(u32(t * 8.0) % ${Layer.WaterFrames}u); }
+    case 4u: { return ${Layer.Lava} + i32(u32(t * 2.5) % ${Layer.LavaFrames}u); }
+    case 5u: { return select(select(${Layer.GrassSide}, ${Layer.GrassTop}, normal.y > 0.5), ${Layer.Dirt}, normal.y < -0.5); }
+    case 6u: { return ${Layer.Wheat} + i32(min(kind >> 4u, 7u)); }
+    case 7u: { return ${Layer.Diamond}; }
+    default: { return -1; }
+  }
+}
+
+@fragment
+fn fs(in: VSOut) -> @location(0) vec4f {
+  // Texture coordinates: tops and bottoms by x and z, sides by their horizontal axis and
+  // height (v down), so whole blocks tile the (repeating) texture with no seams for mipmapping
+  // to trip over; wheat's crossed quads by their place across the block. Gradients here,
+  // before anything branches or discards.
+  let local = in.world - floor(in.world - in.normal * 0.001);
+  var uv = select(select(vec2f(in.world.x, -in.world.y), vec2f(in.world.z, -in.world.y), abs(in.normal.x) > 0.5), in.world.xz, abs(in.normal.y) > 0.5);
+  if ((in.kind & 15u) == ${Block.Wheat}u) { uv = vec2f((local.z - ${INSET}) / ${1 - 2 * INSET}, 1.0 - local.y); }
+  let duvx = dpdx(uv);
+  let duvy = dpdy(uv);
+  // 8x8 "texel" grid on each face for a pixel-art look.
+  let cellPos = floor((in.world - in.normal * 0.001) * 8.0);
+  // A texel's shade is layered variation at 1, 2, 4 and 8 texels (the last a tint per block).
+  // That makes mip levels possible, as with a texture: how many texels a pixel spans (lod 0
+  // when one, 1 when two, ...) fades out the layers finer than that, so a distant face shows
+  // its own pattern at lower resolution and, further still, just its block's tint, rather
+  // than flickering as the camera turns. (Derivatives first, before any discard.)
+  // (By the pixel's area, not its longest side: ground seen at a low angle keeps its detail,
+  // as anisotropic filtering does for textures.)
+  let span = sqrt(length(dpdx(in.world)) * length(dpdy(in.world))) * 8.0;
+  let lod = log2(max(span, 0.001));
+  var amps = array<f32, 4>(0.62, 0.4, 0.3, 0.32);
+  var n = 0.5;
+  for (var k = 0; k < 4; k++) {
+    let size = f32(1 << u32(k));
+    let keep = 1.0 - clamp(lod - f32(k), 0.0, 1.0);
+    n += amps[k] * keep * (hash3(floor(cellPos / size) + vec3f(f32(k) * 37.0)) - 0.5);
+  }
+  n = clamp(n, 0.0, 1.0);
+  let blur = clamp(lod, 0.0, 1.0); // texel-sized details (grass fringe, diamond gems) average out from lod 0 to 1
+  // A newly arrived chunk dissolves in: each pixel appears once the fade passes its place in a
+  // 4x4 ordered-dither pattern, so it blends over the far terrain without sorting.
+  if (in.fade < 1.0) {
+    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let p = vec2u(in.pos.xy) % vec2u(4u);
+    if (in.fade <= (bayer[p.y * 4u + p.x] + 0.5) / 16.0) { discard; }
+  }
+  let t = u.camPos.w;
+
+  var base: vec3f;
+  var alpha = 1.0;
+  var emissive = 0.0;
+  // Block type in the low 4 bits; wheat carries its growth stage above them.
+  let stage = in.kind >> 4u;
+  // Textured (once loaded: fogCap.y), or else the procedural look below. Concrete stays plain.
+  let layer = select(-1, layerFor(in.kind, in.normal, t), u.fogCap.y > 0.5);
+  if (layer >= 0) {
+    let c = textureSampleGrad(blockTex, blockSampler, uv, layer, duvx, duvy);
+    base = c.rgb;
+    switch in.kind & 15u {
+      case 3u: { alpha = c.a; }
+      case 4u: { emissive = 1.0; }
+      case 6u: { if (c.a < 0.35) { discard; } }
+      case 7u: { emissive = 0.3 * clamp((c.b - c.r) * 3.0, 0.0, 1.0); } // the gems glow faintly
+      default: {}
+    }
+  } else {
+  switch in.kind & 15u {
+    case 1u: {                                                                    // stone, or pastel concrete
+      if (stage == 0u) {
+        base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n);
+      } else {
+        var concrete = array<vec3f, ${CONCRETE_COLOURS.length}>(${CONCRETE_COLOURS.map((c) => `vec3f(${c.rgb.join(', ')})`).join(', ')});
+        base = concrete[min(stage, ${CONCRETE_COLOURS.length}u) - 1u] * (0.97 + 0.05 * n); // smooth, matte
+        emissive = 0.4; // stays pastel in shade (still shaded enough to show its edges)
+      }
+    }
+    case 2u: { base = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n); }               // dirt
+    case 3u: {                                                                    // water
+      let w = 0.5 + 0.5 * sin(t * 1.5 + in.world.x * 0.8 + in.world.z * 0.6 + n * 2.0);
+      base = mix(vec3f(0.10, 0.30, 0.75), vec3f(0.25, 0.50, 0.90), w * 0.6);
+      alpha = 0.68;
+    }
+    case 4u: {                                                                    // lava
+      let flow = 0.5 + 0.5 * sin(t * 2.0 + n * 6.28 + in.world.x * 0.5 - in.world.z * 0.4);
+      base = mix(vec3f(0.85, 0.25, 0.02), vec3f(1.0, 0.75, 0.15), flow * (0.6 + 0.4 * n));
+      emissive = 1.0;
+    }
+    case 5u: {                                                                    // grass
+      let dirt = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n);
+      let green = vec3f(0.36, 0.62, 0.22) * (0.8 + 0.3 * n);
+      // Green on top; on the sides a ragged green fringe over dirt; dirt underneath.
+      let row = floor(fract(in.world.y) * 8.0);
+      let fringe = row >= 7.0 || (row >= 6.0 && n > 0.55);
+      // Far away a side is its average: about a fifth green.
+      let sideGreen = mix(select(0.0, 1.0, fringe), 0.2, blur);
+      base = select(dirt, mix(dirt, green, sideGreen), abs(in.normal.y) < 0.5);
+      base = select(base, green, in.normal.y > 0.5);
+    }
+    case 6u: {                                                                    // wheat
+      let h = 1.0;
+      let along = fract(in.world.x + in.world.z * 0.37); // across the crossed quads
+      let up = fract(in.world.y) / h;                    // 0 at the soil, 1 at the tip
+      let ear = stage >= 4u && up > 0.7;
+      // Four thin stalks, thicker ears near the tip once it has grown a while; the rest is see-through.
+      if (abs(fract(along * 4.0) - 0.5) > select(0.12, 0.3, ear)) { discard; }
+      base = mix(vec3f(0.30, 0.62, 0.20), vec3f(0.88, 0.74, 0.32), f32(stage) / 7.0) * (0.8 + 0.3 * n);
+      if (ear) { base *= 0.85; }
+    }
+    case 7u: {                                                                    // diamond ore
+      // Stone with clusters of cyan gems in the texel grid, faintly glowing.
+      let gem = hash3(floor(cellPos / 2.0) + vec3f(17.0, 5.0, 11.0)) > 0.6 && n > 0.35;
+      // Far away, the average: about a quarter gem.
+      let gems = mix(select(0.0, 1.0, gem), 0.25, blur);
+      base = mix(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gems);
+      emissive = 0.25 * gems;
+    }
+    default: { base = vec3f(1.0, 0.0, 1.0); }
+  }
+  }
+
+  let sun = normalize(vec3f(0.4, 0.85, 0.3));
+  let diffuse = max(dot(in.normal, sun), 0.0);
+  let side = 0.8 + 0.2 * abs(in.normal.y) + 0.08 * abs(in.normal.x);
+  var lit = base * mix((0.6 + 0.4 * diffuse) * side, 1.0, emissive);
+
+  let dist = distance(in.world, u.camPos.xyz);
+  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, u.fogCap.x);
+  lit = mix(lit, u.sky.rgb, fog);
+  return vec4f(lit, alpha);
+}
+`;
 
 const uniforms = /* wgsl */ `
 struct Uniforms {
   viewProj: mat4x4f,
   camPos: vec4f,   // xyz = camera, w = time (s)
   sky: vec4f,      // rgb = sky / fog colour, w = fog distance
-  fogCap: vec4f,   // x = how thick the fog gets (1 = plain sky; less in mist, so far terrain shows through)
+  fogCap: vec4f,   // x = how thick the fog gets (1 = plain sky; less in mist, so far terrain shows through), y = 1 once blocks are textured
 };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 `;
@@ -67,7 +219,7 @@ fn faceVertex(record: u32, slot: u32, vertex: u32) -> VSOut {
     let atEnd = (k == 1u || k == 2u) != back;
     let start = vec3f(select(INSET, 1.0 - INSET, plane == 1u), 0.0, INSET);
     let end = vec3f(select(1.0 - INSET, INSET, plane == 1u), 0.0, 1.0 - INSET);
-    let height = 0.25 + f32(aux) * 0.1; // wheat grows with its stage
+    let height = 1.0; // (wheat grows in its texture)
     pos = block + select(start, end, atEnd) + vec3f(0.0, select(0.0, height, k >= 2u), 0.0);
     kind = t + 16u * aux;
   } else {
@@ -100,109 +252,7 @@ fn vsFace(@builtin(vertex_index) v: u32, @builtin(instance_index) slot: u32) -> 
   return faceVertex(faces[v / 6u], slot, v % 6u);
 }
 
-fn hash3(p: vec3f) -> f32 {
-  return fract(sin(dot(p, vec3f(127.1, 311.7, 74.7))) * 43758.5453);
-}
-
-@fragment
-fn fs(in: VSOut) -> @location(0) vec4f {
-  // 8x8 "texel" grid on each face for a pixel-art look.
-  let cellPos = floor((in.world - in.normal * 0.001) * 8.0);
-  // A texel's shade is layered variation at 1, 2, 4 and 8 texels (the last a tint per block).
-  // That makes mip levels possible, as with a texture: how many texels a pixel spans (lod 0
-  // when one, 1 when two, ...) fades out the layers finer than that, so a distant face shows
-  // its own pattern at lower resolution and, further still, just its block's tint, rather
-  // than flickering as the camera turns. (Derivatives first, before any discard.)
-  // (By the pixel's area, not its longest side: ground seen at a low angle keeps its detail,
-  // as anisotropic filtering does for textures.)
-  let span = sqrt(length(dpdx(in.world)) * length(dpdy(in.world))) * 8.0;
-  let lod = log2(max(span, 0.001));
-  var amps = array<f32, 4>(0.62, 0.4, 0.3, 0.32);
-  var n = 0.5;
-  for (var k = 0; k < 4; k++) {
-    let size = f32(1 << u32(k));
-    let keep = 1.0 - clamp(lod - f32(k), 0.0, 1.0);
-    n += amps[k] * keep * (hash3(floor(cellPos / size) + vec3f(f32(k) * 37.0)) - 0.5);
-  }
-  n = clamp(n, 0.0, 1.0);
-  let blur = clamp(lod, 0.0, 1.0); // texel-sized details (grass fringe, diamond gems) average out from lod 0 to 1
-  // A newly arrived chunk dissolves in: each pixel appears once the fade passes its place in a
-  // 4x4 ordered-dither pattern, so it blends over the far terrain without sorting.
-  if (in.fade < 1.0) {
-    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    let p = vec2u(in.pos.xy) % vec2u(4u);
-    if (in.fade <= (bayer[p.y * 4u + p.x] + 0.5) / 16.0) { discard; }
-  }
-  let t = u.camPos.w;
-
-  var base: vec3f;
-  var alpha = 1.0;
-  var emissive = 0.0;
-  // Block type in the low 4 bits; wheat carries its growth stage above them.
-  let stage = in.kind >> 4u;
-  switch in.kind & 15u {
-    case 1u: {                                                                    // stone, or pastel concrete
-      if (stage == 0u) {
-        base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n);
-      } else {
-        var concrete = array<vec3f, ${CONCRETE_COLOURS.length}>(${CONCRETE_COLOURS.map((c) => `vec3f(${c.rgb.join(', ')})`).join(', ')});
-        base = concrete[min(stage, ${CONCRETE_COLOURS.length}u) - 1u] * (0.97 + 0.05 * n); // smooth, matte
-        emissive = 0.4; // stays pastel in shade (still shaded enough to show its edges)
-      }
-    }
-    case 2u: { base = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n); }               // dirt
-    case 3u: {                                                                    // water
-      let w = 0.5 + 0.5 * sin(t * 1.5 + in.world.x * 0.8 + in.world.z * 0.6 + n * 2.0);
-      base = mix(vec3f(0.10, 0.30, 0.75), vec3f(0.25, 0.50, 0.90), w * 0.6);
-      alpha = 0.68;
-    }
-    case 4u: {                                                                    // lava
-      let flow = 0.5 + 0.5 * sin(t * 2.0 + n * 6.28 + in.world.x * 0.5 - in.world.z * 0.4);
-      base = mix(vec3f(0.85, 0.25, 0.02), vec3f(1.0, 0.75, 0.15), flow * (0.6 + 0.4 * n));
-      emissive = 1.0;
-    }
-    case 5u: {                                                                    // grass
-      let dirt = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n);
-      let green = vec3f(0.36, 0.62, 0.22) * (0.8 + 0.3 * n);
-      // Green on top; on the sides a ragged green fringe over dirt; dirt underneath.
-      let row = floor(fract(in.world.y) * 8.0);
-      let fringe = row >= 7.0 || (row >= 6.0 && n > 0.55);
-      // Far away a side is its average: about a fifth green.
-      let sideGreen = mix(select(0.0, 1.0, fringe), 0.2, blur);
-      base = select(dirt, mix(dirt, green, sideGreen), abs(in.normal.y) < 0.5);
-      base = select(base, green, in.normal.y > 0.5);
-    }
-    case 6u: {                                                                    // wheat
-      let h = 0.25 + f32(stage) * 0.1;
-      let along = fract(in.world.x + in.world.z * 0.37); // across the crossed quads
-      let up = fract(in.world.y) / h;                    // 0 at the soil, 1 at the tip
-      let ear = stage >= 4u && up > 0.7;
-      // Four thin stalks, thicker ears near the tip once it has grown a while; the rest is see-through.
-      if (abs(fract(along * 4.0) - 0.5) > select(0.12, 0.3, ear)) { discard; }
-      base = mix(vec3f(0.30, 0.62, 0.20), vec3f(0.88, 0.74, 0.32), f32(stage) / 7.0) * (0.8 + 0.3 * n);
-      if (ear) { base *= 0.85; }
-    }
-    case 7u: {                                                                    // diamond ore
-      // Stone with clusters of cyan gems in the texel grid, faintly glowing.
-      let gem = hash3(floor(cellPos / 2.0) + vec3f(17.0, 5.0, 11.0)) > 0.6 && n > 0.35;
-      // Far away, the average: about a quarter gem.
-      let gems = mix(select(0.0, 1.0, gem), 0.25, blur);
-      base = mix(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gems);
-      emissive = 0.25 * gems;
-    }
-    default: { base = vec3f(1.0, 0.0, 1.0); }
-  }
-
-  let sun = normalize(vec3f(0.4, 0.85, 0.3));
-  let diffuse = max(dot(in.normal, sun), 0.0);
-  let side = 0.8 + 0.2 * abs(in.normal.y) + 0.08 * abs(in.normal.x);
-  var lit = base * mix((0.6 + 0.4 * diffuse) * side, 1.0, emissive);
-
-  let dist = distance(in.world, u.camPos.xyz);
-  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, u.fogCap.x);
-  lit = mix(lit, u.sky.rgb, fog);
-  return vec4f(lit, alpha);
-}
+${blockFragment(3)}
 `;
 
 /**
@@ -393,107 +443,5 @@ fn vs(@location(0) pos: vec3f, @location(1) normal: vec3f, @location(2) kind: f3
   return o;
 }
 
-fn hash3(p: vec3f) -> f32 {
-  return fract(sin(dot(p, vec3f(127.1, 311.7, 74.7))) * 43758.5453);
-}
-
-@fragment
-fn fs(in: VSOut) -> @location(0) vec4f {
-  // 8x8 "texel" grid on each face for a pixel-art look.
-  let cellPos = floor((in.world - in.normal * 0.001) * 8.0);
-  // A texel's shade is layered variation at 1, 2, 4 and 8 texels (the last a tint per block).
-  // That makes mip levels possible, as with a texture: how many texels a pixel spans (lod 0
-  // when one, 1 when two, ...) fades out the layers finer than that, so a distant face shows
-  // its own pattern at lower resolution and, further still, just its block's tint, rather
-  // than flickering as the camera turns. (Derivatives first, before any discard.)
-  // (By the pixel's area, not its longest side: ground seen at a low angle keeps its detail,
-  // as anisotropic filtering does for textures.)
-  let span = sqrt(length(dpdx(in.world)) * length(dpdy(in.world))) * 8.0;
-  let lod = log2(max(span, 0.001));
-  var amps = array<f32, 4>(0.62, 0.4, 0.3, 0.32);
-  var n = 0.5;
-  for (var k = 0; k < 4; k++) {
-    let size = f32(1 << u32(k));
-    let keep = 1.0 - clamp(lod - f32(k), 0.0, 1.0);
-    n += amps[k] * keep * (hash3(floor(cellPos / size) + vec3f(f32(k) * 37.0)) - 0.5);
-  }
-  n = clamp(n, 0.0, 1.0);
-  let blur = clamp(lod, 0.0, 1.0); // texel-sized details (grass fringe, diamond gems) average out from lod 0 to 1
-  // A newly arrived chunk dissolves in: each pixel appears once the fade passes its place in a
-  // 4x4 ordered-dither pattern, so it blends over the far terrain without sorting.
-  if (in.fade < 1.0) {
-    var bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-    let p = vec2u(in.pos.xy) % vec2u(4u);
-    if (in.fade <= (bayer[p.y * 4u + p.x] + 0.5) / 16.0) { discard; }
-  }
-  let t = u.camPos.w;
-
-  var base: vec3f;
-  var alpha = 1.0;
-  var emissive = 0.0;
-  // Block type in the low 4 bits; wheat carries its growth stage above them.
-  let stage = in.kind >> 4u;
-  switch in.kind & 15u {
-    case 1u: {                                                                    // stone, or pastel concrete
-      if (stage == 0u) {
-        base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n);
-      } else {
-        var concrete = array<vec3f, ${CONCRETE_COLOURS.length}>(${CONCRETE_COLOURS.map((c) => `vec3f(${c.rgb.join(', ')})`).join(', ')});
-        base = concrete[min(stage, ${CONCRETE_COLOURS.length}u) - 1u] * (0.97 + 0.05 * n); // smooth, matte
-        emissive = 0.4; // stays pastel in shade (still shaded enough to show its edges)
-      }
-    }
-    case 2u: { base = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n); }               // dirt
-    case 3u: {                                                                    // water
-      let w = 0.5 + 0.5 * sin(t * 1.5 + in.world.x * 0.8 + in.world.z * 0.6 + n * 2.0);
-      base = mix(vec3f(0.10, 0.30, 0.75), vec3f(0.25, 0.50, 0.90), w * 0.6);
-      alpha = 0.68;
-    }
-    case 4u: {                                                                    // lava
-      let flow = 0.5 + 0.5 * sin(t * 2.0 + n * 6.28 + in.world.x * 0.5 - in.world.z * 0.4);
-      base = mix(vec3f(0.85, 0.25, 0.02), vec3f(1.0, 0.75, 0.15), flow * (0.6 + 0.4 * n));
-      emissive = 1.0;
-    }
-    case 5u: {                                                                    // grass
-      let dirt = vec3f(0.55, 0.38, 0.24) * (0.8 + 0.35 * n);
-      let green = vec3f(0.36, 0.62, 0.22) * (0.8 + 0.3 * n);
-      // Green on top; on the sides a ragged green fringe over dirt; dirt underneath.
-      let row = floor(fract(in.world.y) * 8.0);
-      let fringe = row >= 7.0 || (row >= 6.0 && n > 0.55);
-      // Far away a side is its average: about a fifth green.
-      let sideGreen = mix(select(0.0, 1.0, fringe), 0.2, blur);
-      base = select(dirt, mix(dirt, green, sideGreen), abs(in.normal.y) < 0.5);
-      base = select(base, green, in.normal.y > 0.5);
-    }
-    case 6u: {                                                                    // wheat
-      let h = 0.25 + f32(stage) * 0.1;
-      let along = fract(in.world.x + in.world.z * 0.37); // across the crossed quads
-      let up = fract(in.world.y) / h;                    // 0 at the soil, 1 at the tip
-      let ear = stage >= 4u && up > 0.7;
-      // Four thin stalks, thicker ears near the tip once it has grown a while; the rest is see-through.
-      if (abs(fract(along * 4.0) - 0.5) > select(0.12, 0.3, ear)) { discard; }
-      base = mix(vec3f(0.30, 0.62, 0.20), vec3f(0.88, 0.74, 0.32), f32(stage) / 7.0) * (0.8 + 0.3 * n);
-      if (ear) { base *= 0.85; }
-    }
-    case 7u: {                                                                    // diamond ore
-      // Stone with clusters of cyan gems in the texel grid, faintly glowing.
-      let gem = hash3(floor(cellPos / 2.0) + vec3f(17.0, 5.0, 11.0)) > 0.6 && n > 0.35;
-      // Far away, the average: about a quarter gem.
-      let gems = mix(select(0.0, 1.0, gem), 0.25, blur);
-      base = mix(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gems);
-      emissive = 0.25 * gems;
-    }
-    default: { base = vec3f(1.0, 0.0, 1.0); }
-  }
-
-  let sun = normalize(vec3f(0.4, 0.85, 0.3));
-  let diffuse = max(dot(in.normal, sun), 0.0);
-  let side = 0.8 + 0.2 * abs(in.normal.y) + 0.08 * abs(in.normal.x);
-  var lit = base * mix((0.6 + 0.4 * diffuse) * side, 1.0, emissive);
-
-  let dist = distance(in.world, u.camPos.xyz);
-  let fog = clamp((dist - u.sky.w * 0.6) / (u.sky.w * 0.4), 0.0, u.fogCap.x);
-  lit = mix(lit, u.sky.rgb, fog);
-  return vec4f(lit, alpha);
-}
+${blockFragment(1)}
 `;

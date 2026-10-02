@@ -44,8 +44,8 @@ export const heightCode = (c: number, above: number): number =>
 export const fluidHeight = (code: number): number =>
   code === FULL_HEIGHT ? 1 : code >= SOURCE_LEVEL ? 0.875 : Math.max(0.125, (code / FALLING_LEVEL) * 0.8);
 
-/** Height of a wheat plant at a growth stage, 0..1. */
-export const wheatHeight = (stage: number) => 0.25 + stage * 0.1;
+/** Height of a wheat plant: a whole block at every stage (its texture shows it growing). */
+export const WHEAT_HEIGHT = 1;
 
 type Vec3 = readonly [number, number, number];
 /** The normal of each side Face. */
@@ -124,7 +124,7 @@ export function faceQuad(record: number, ox: number, oz: number): Quad {
   const { x, y, z, face, type, aux } = unpackFace(record);
   const bx = ox + x, bz = oz + z;
   if (face >= Face.PlantA) {
-    const [x0, z0, x1, z1] = PLANT_QUADS[(face - Face.PlantA) >> 1], h = wheatHeight(aux);
+    const [x0, z0, x1, z1] = PLANT_QUADS[(face - Face.PlantA) >> 1], h = WHEAT_HEIGHT;
     const b0 = [bx + x0, y, bz + z0], b1 = [bx + x1, y, bz + z1], t0 = [bx + x0, y + h, bz + z0], t1 = [bx + x1, y + h, bz + z1];
     const front = (face - Face.PlantA) % 2 === 0;
     return { corners: front ? [b0, b1, t1, t0] : [b1, b0, t0, t1], normal: [0, 1, 0], kind: type + 16 * aux };

@@ -37,12 +37,16 @@ fetched only once play starts). It fades in when play starts (browsers only let 
 tap) and out on the start screen or when the tab is hidden; `M` or the touch Music button switch it off, remembered
 between visits (`src/ui/music.ts`).
 
-**Less shimmer far away:** block faces are textured in the shader, so there are no texture images to mipmap; the
-shader builds the equivalent. A texel's shade is layered variation at 1, 2, 4 and 8 texels (the last a slight tint
-per block), and from how many texels a pixel covers (by its area, so ground seen at a low angle keeps its detail,
-as anisotropic filtering does) the layers finer than that fade out: a distant face shows its own pattern at lower
-resolution and, further still, its block's tint, like a mipmapped texture, instead of flickering as you turn. The
-grass fringe and diamond ore's gems average out the same way. Block edges get 4× multisample antialiasing
+**Block textures:** grass, dirt, stone, diamond ore, water (16 animation frames), lava (8) and wheat's eight
+growth stages are from the [Baunilha](https://content.luanti.org/packages/Mirtilo/baunilha/) texture pack for
+Luanti by Mirtilo ([CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); credited on the start screen
+too). `scripts/convert-textures.mjs` turns the pack's PNGs (`assets/baunilha/`, with its licence) into one small
+file of 16 × 16 layers, `public/textures/blocks.bin` (the grass side and the diamond composited over dirt and
+stone): an adaptation, so those layers are CC BY-SA 4.0 as well. The game loads it as a texture array with
+mipmaps (pixel-art up close, smoothly averaged further away, so distant faces don't shimmer as you turn); faces
+take their texture coordinates from their place in the world, so blocks tile without seams. Wheat is a whole
+block tall at every stage, its texture showing it grow. Pastel concrete stays plain. Until the textures load,
+or if they fail to, blocks keep the earlier procedural look. Block edges get 4× multisample antialiasing
 (`?msaa=0` turns it off; safe mode leaves it off).
 
 **Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono, 43 KB
@@ -150,6 +154,7 @@ grass and wheat taking over the terrain around spawn and logs tick times.
 | `src/world/` | Chunk bookkeeping: ring slots, active area / ghost halo, awake chunks, versions for remeshing, edited chunks saved when they leave; the TF.js → store loader |
 | `src/render/mesher.ts` | Face records (one `u32` per quad) and the reference mesher |
 | `src/render/gpuMesher.ts` | The mesher as a compute shader, writing face records and indirect draw counts |
+| `src/render/blockTextures.ts` | The block texture layers (Baunilha) and their mipmaps |
 | `src/render/` (rest) | Mesh pool, WGSL shaders (vertex pulling from face records), renderer (opaque, lines, translucent water) |
 | `src/tf/blockUpdateReference.ts` | The rules cell by cell in plain JS: the readable spec, and the oracle every other version is tested against |
 | `src/tf/blockUpdate.ts`, `blockUpdateKernel.ts` | The rules as TF.js tensor ops, and as a TF.js custom kernel (the previous design's tick, kept for the benchmark) |

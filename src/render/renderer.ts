@@ -73,6 +73,9 @@ export class Renderer {
   private layout!: GPUBindGroupLayout;
   private bindGroup?: GPUBindGroup;
   private bindGroupKey?: ClassicMeshes | GPUBuffer;
+  private blockTextures!: GPUTexture;
+  private blockSampler!: GPUSampler;
+  private textured = false;
   private opaquePipeline!: GPURenderPipeline;
   private waterPipeline!: GPURenderPipeline;
   private linePipeline!: GPURenderPipeline;
@@ -127,12 +130,24 @@ export class Renderer {
     const safe = this.options.safe === true;
     // Uniforms, then (except in safe mode) the meshes' face records and chunk origins, read by the vertex shader.
     const uniformEntry: GPUBindGroupLayoutEntry = { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} };
+    // Then the block textures and their sampler, for the fragment shader.
+    const textureBinding = safe ? 1 : 3;
     this.layout = device.createBindGroupLayout({
-      entries: safe ? [uniformEntry] : [
-        uniformEntry,
-        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-        { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+      entries: [
+        ...(safe ? [uniformEntry] : [
+          uniformEntry,
+          { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+          { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        ] satisfies GPUBindGroupLayoutEntry[]),
+        { binding: textureBinding, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+        { binding: textureBinding + 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
       ],
+    });
+    // Until the textures load (or if they don't), a blank layer, and blocks keep their procedural look.
+    this.blockTextures = device.createTexture({ label: 'no block textures', size: [1, 1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING });
+    // Pixel-art up close (nearest), smoothly mipmapped further away; repeating, as faces tile by world position.
+    this.blockSampler = device.createSampler({
+      magFilter: 'nearest', minFilter: 'linear', mipmapFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat',
     });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
 
@@ -269,8 +284,20 @@ export class Renderer {
     const buffers = meshes instanceof ClassicMeshes ? [this.uniformBuffer] : [this.uniformBuffer, meshes.faces, meshes.origins];
     return this.bindGroup = this.device.createBindGroup({
       layout: this.layout,
-      entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+      entries: [
+        ...buffers.map((buffer, binding) => ({ binding, resource: { buffer } })),
+        { binding: buffers.length, resource: this.blockTextures.createView({ dimension: '2d-array' }) },
+        { binding: buffers.length + 1, resource: this.blockSampler },
+      ],
     });
+  }
+
+  /** Texture the blocks with these layers (render/blockTextures.ts) from now on. */
+  setBlockTextures(texture: GPUTexture): void {
+    this.blockTextures.destroy();
+    this.blockTextures = texture;
+    this.textured = true;
+    this.bindGroup = undefined;
   }
 
   private resize(): void {
@@ -341,7 +368,7 @@ export class Renderer {
     u.set(viewProj, 0);
     u.set([cam[0], cam[1], cam[2], time], 16);
     u.set([...SKY, fogDistance], 20);
-    u.set([far?.look === 'mist' ? MIST_FOG : 1, 0, 0, 0], 24);
+    u.set([far?.look === 'mist' ? MIST_FOG : 1, this.textured ? 1 : 0, 0, 0], 24);
     device.queue.writeBuffer(this.uniformBuffer, 0, u);
 
     if (lines.length > 0 && (!this.lineBuffer || this.lineBuffer.size < lines.byteLength)) {
