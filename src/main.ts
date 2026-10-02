@@ -471,7 +471,7 @@ async function main(): Promise<void> {
     if (!before.onGround && b.onGround && before.fallSpeed > 7 && !b.inFluid) sounds.land(before.fallSpeed);
     if (b.onGround && !b.inFluid) {
       stepDistance += Math.hypot(feet[0] - before.feet[0], feet[2] - before.feet[2]);
-      if (stepDistance > 1.7) {
+      if (stepDistance > 2.5) {
         stepDistance = 0;
         const under = nearby?.at(Math.floor(feet[0]), Math.floor(feet[1] - 0.05), Math.floor(feet[2]));
         if (under !== undefined && under !== NOT_LOADED) sounds.step(under as Block);

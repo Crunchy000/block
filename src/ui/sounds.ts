@@ -188,9 +188,9 @@ export class Sounds {
 
   /** A footstep on a block of `type` (grass and dirt soft, stone sharper). */
   step(type: Block): void {
-    // The landing thud, softer, a little higher on stone and concrete, varied so steps differ.
+    // The landing thud, much softer, a little higher on stone and concrete, varied so steps differ.
     const hard = type === Block.Stone || type === Block.Diamond;
-    this.thud(0.3, (hard ? 1.2 : 1) * (0.9 + Math.random() * 0.2));
+    this.thud(0.18, (hard ? 1.2 : 1) * (0.9 + Math.random() * 0.2));
   }
 
   /** Landing after a fall, louder the harder. */
