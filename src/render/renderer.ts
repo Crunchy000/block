@@ -46,6 +46,11 @@ export interface RendererOptions {
    * stage, no draw sizes read from GPU memory.
    */
   safe?: boolean;
+  /**
+   * Multisample antialiasing: 4 samples a pixel smooth the edges of blocks (most of all far
+   * away, where they'd otherwise shimmer as the camera turns). On unless false.
+   */
+  msaa?: boolean;
 }
 
 export class Renderer {
@@ -58,6 +63,9 @@ export class Renderer {
   private frameInFlight = false;
   private format!: GPUTextureFormat;
   private depth?: GPUTexture;
+  /** Samples per pixel (4 with MSAA), and the multisampled colour target resolved into the frame. */
+  private samples = 1;
+  private msaaTarget?: GPUTexture;
   private uniformBuffer!: GPUBuffer;
   private layout!: GPUBindGroupLayout;
   private bindGroup?: GPUBindGroup;
@@ -109,6 +117,7 @@ export class Renderer {
       this.context.configure({ device, format: this.format, alphaMode: 'opaque' });
     }
 
+    this.samples = this.options.msaa === false ? 1 : 4;
     this.uniformBuffer = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const safe = this.options.safe === true;
     // Uniforms, then (except in safe mode) the meshes' face records and chunk origins, read by the vertex shader.
@@ -142,6 +151,7 @@ export class Renderer {
       fragment: { module: blockModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
       depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' },
+      multisample: { count: this.samples },
     });
     this.waterPipeline = device.createRenderPipeline({
       label: 'blocks (water)',
@@ -160,6 +170,7 @@ export class Renderer {
       },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'greater' },
+      multisample: { count: this.samples },
     });
     // Far terrain: its own small uniform block beside the shared one; plain vertex buffers, so safe mode draws it too.
     this.farUniforms = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
@@ -178,6 +189,7 @@ export class Renderer {
       fragment: { module: farModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' },
+      multisample: { count: this.samples },
     });
 
     // Mobs: textured models, one instance per mob (plain vertex buffers and a texture: safe mode too).
@@ -219,6 +231,7 @@ export class Renderer {
       fragment: { module: mobModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'none' },
       depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' },
+      multisample: { count: this.samples },
     });
 
     const lineModule = device.createShaderModule({ label: 'lines', code: lineShader });
@@ -239,6 +252,7 @@ export class Renderer {
       fragment: { module: lineModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'line-list' },
       depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'greater-equal' },
+      multisample: { count: this.samples },
     });
   }
 
@@ -262,7 +276,11 @@ export class Renderer {
       this.canvas.width = w;
       this.canvas.height = h;
       this.depth?.destroy();
-      this.depth = this.device.createTexture({ size: [w, h], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      this.depth = this.device.createTexture({ size: [w, h], format: DEPTH, usage: GPUTextureUsage.RENDER_ATTACHMENT, sampleCount: this.samples });
+      this.msaaTarget?.destroy();
+      this.msaaTarget = this.samples > 1
+        ? this.device.createTexture({ size: [w, h], format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT, sampleCount: this.samples })
+        : undefined;
       if (this.options.offscreen) {
         this.colorTarget?.destroy();
         this.colorTarget = this.device.createTexture({
@@ -354,10 +372,12 @@ export class Renderer {
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [{
-        view: (this.colorTarget ?? this.context!.getCurrentTexture()).createView(),
+        // With MSAA: draw into the multisampled target and resolve it into the frame.
+        ...(this.msaaTarget
+          ? { view: this.msaaTarget.createView(), resolveTarget: (this.colorTarget ?? this.context!.getCurrentTexture()).createView(), storeOp: 'discard' as const }
+          : { view: (this.colorTarget ?? this.context!.getCurrentTexture()).createView(), storeOp: 'store' as const }),
         clearValue: { r: SKY[0], g: SKY[1], b: SKY[2], a: 1 },
         loadOp: 'clear',
-        storeOp: 'store',
       }],
       depthStencilAttachment: { view: this.depth!.createView(), depthClearValue: 0, depthLoadOp: 'clear', depthStoreOp: 'store' },
     });

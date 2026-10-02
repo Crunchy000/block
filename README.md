@@ -37,6 +37,13 @@ fetched only once play starts). It fades in when play starts (browsers only let 
 tap) and out on the start screen or when the tab is hidden; `M` or the touch Music button switch it off, remembered
 between visits (`src/ui/music.ts`).
 
+**Less shimmer far away:** block faces are textured in the shader (an 8 × 8 grid of randomly shaded texels), so
+there are no texture images to mipmap; the shader does the equivalent instead. It measures how many texels one
+pixel spans (from screen-space derivatives) and, once that passes about one, fades each texel's variation, the
+grass sides' green fringe and diamond ore's gems toward their averages, so distant blocks turn to steady colour
+instead of flickering as you turn (the far terrain's pattern too). Block edges get 4× multisample antialiasing
+(`?msaa=0` turns it off; safe mode leaves it off).
+
 **Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono, 43 KB
 together) for animal calls (cows, pigs, sheep and chickens now and then, the horse borrowing the cow's higher;
 louder and higher when hit), a block breaking (higher for stone) and splashing into water, each at a slightly

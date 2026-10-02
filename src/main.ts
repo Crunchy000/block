@@ -142,7 +142,10 @@ async function main(): Promise<void> {
   // that crash on the GPU world or its renderer.
   const safe = params.has('safe');
   if (safe) log.info('Safe mode: world on the CPU, meshes built on the CPU, plain draws');
-  const renderer = await Renderer.create(canvas, { offscreen: params.has('offscreen'), safe });
+  // 4x MSAA smooths block edges (?msaa=0 turns it off; safe mode keeps it off, to stay simple).
+  const msaa = !safe && params.get('msaa') !== '0';
+  const renderer = await Renderer.create(canvas, { offscreen: params.has('offscreen'), safe, msaa });
+  log.info(`Antialiasing: ${msaa ? '4x MSAA' : 'off'}`);
   setStatus('Starting TensorFlow.js…');
   let tfBackend = await initTensorflow(renderer.device, renderer.adapterInfo);
   log.info(`TensorFlow.js backend: ${tfBackend}`);
@@ -207,7 +210,7 @@ async function main(): Promise<void> {
     ...(params.has('spread') && { grassSpread: chance('spread') }),
     ...(params.has('grow') && { wheatGrow: chance('grow'), wheatGrowWet: chance('grow') }),
   });
-  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)
+  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)&msaa=0
   const pos = (params.get('pos') ?? '8,52,8').split(',').map(Number) as [number, number, number];
   const controls = new Controls(canvas, pos);
   controls.flying = params.has('fly');

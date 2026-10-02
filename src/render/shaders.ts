@@ -102,7 +102,12 @@ fn hash3(p: vec3f) -> f32 {
 fn fs(in: VSOut) -> @location(0) vec4f {
   // 8x8 "texel" grid on each face for a pixel-art look.
   let cellPos = floor((in.world - in.normal * 0.001) * 8.0);
-  let n = hash3(cellPos);
+  // Filtering, the computed-texture equivalent of mipmaps: how many texels one pixel spans.
+  // Once that passes about one, each texel's random variation fades toward its average, so
+  // distant blocks don't flicker as the camera turns. (Derivatives first, before any discard.)
+  let span = max(length(dpdx(in.world)), length(dpdy(in.world))) * 8.0;
+  let blur = clamp((span - 0.6) / 1.4, 0.0, 1.0);
+  let n = mix(hash3(cellPos), 0.5, blur);
   let t = u.camPos.w;
 
   var base: vec3f;
@@ -137,7 +142,10 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       // Green on top; on the sides a ragged green fringe over dirt; dirt underneath.
       let row = floor(fract(in.world.y) * 8.0);
       let fringe = row >= 7.0 || (row >= 6.0 && n > 0.55);
-      base = select(dirt, green, in.normal.y > 0.5 || (abs(in.normal.y) < 0.5 && fringe));
+      // Far away a side is its average: about a fifth green.
+      let sideGreen = mix(select(0.0, 1.0, fringe), 0.2, blur);
+      base = select(dirt, mix(dirt, green, sideGreen), abs(in.normal.y) < 0.5);
+      base = select(base, green, in.normal.y > 0.5);
     }
     case 6u: {                                                                    // wheat
       let h = 0.25 + f32(stage) * 0.1;
@@ -152,8 +160,10 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     case 7u: {                                                                    // diamond ore
       // Stone with clusters of cyan gems in the texel grid, faintly glowing.
       let gem = hash3(floor(cellPos / 2.0) + vec3f(17.0, 5.0, 11.0)) > 0.6 && n > 0.35;
-      base = select(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gem);
-      emissive = select(0.0, 0.25, gem);
+      // Far away, the average: about a quarter gem.
+      let gems = mix(select(0.0, 1.0, gem), 0.25, blur);
+      base = mix(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gems);
+      emissive = 0.25 * gems;
     }
     default: { base = vec3f(1.0, 0.0, 1.0); }
   }
@@ -206,6 +216,9 @@ fn hash2(p: vec2f) -> f32 {
 fn fs(in: VSOut) -> @location(0) vec4f {
   // (Derivatives first: they need every pixel of the quad, so before any discard.)
   var normal = normalize(cross(dpdx(in.world), dpdy(in.world)));
+  // Filtered like the blocks: the 4-block pattern fades to its average where pixels span several cells.
+  let span = max(length(dpdx(in.world.xz)), length(dpdy(in.world.xz))) / 4.0;
+  let blur = clamp((span - 0.6) / 1.4, 0.0, 1.0);
   if (normal.y < 0.0) { normal = -normal; }
   if (all(in.world.xz >= far.near.xy) && all(in.world.xz < far.near.zw)) { discard; }
 
@@ -218,7 +231,7 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     return vec4f(mix(vec3f(0.04, 0.05, 0.08) * shade, u.sky.rgb, haze), 1.0);
   }
 
-  let n = hash2(floor(in.world.xz / 4.0));
+  let n = mix(hash2(floor(in.world.xz / 4.0)), 0.5, blur);
   var base: vec3f;
   if (in.world.y <= far.sea.x + 0.01) {
     base = vec3f(0.2, 0.38, 0.74); // about what translucent water over a sea bed looks like
@@ -354,7 +367,12 @@ fn hash3(p: vec3f) -> f32 {
 fn fs(in: VSOut) -> @location(0) vec4f {
   // 8x8 "texel" grid on each face for a pixel-art look.
   let cellPos = floor((in.world - in.normal * 0.001) * 8.0);
-  let n = hash3(cellPos);
+  // Filtering, the computed-texture equivalent of mipmaps: how many texels one pixel spans.
+  // Once that passes about one, each texel's random variation fades toward its average, so
+  // distant blocks don't flicker as the camera turns. (Derivatives first, before any discard.)
+  let span = max(length(dpdx(in.world)), length(dpdy(in.world))) * 8.0;
+  let blur = clamp((span - 0.6) / 1.4, 0.0, 1.0);
+  let n = mix(hash3(cellPos), 0.5, blur);
   let t = u.camPos.w;
 
   var base: vec3f;
@@ -389,7 +407,10 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       // Green on top; on the sides a ragged green fringe over dirt; dirt underneath.
       let row = floor(fract(in.world.y) * 8.0);
       let fringe = row >= 7.0 || (row >= 6.0 && n > 0.55);
-      base = select(dirt, green, in.normal.y > 0.5 || (abs(in.normal.y) < 0.5 && fringe));
+      // Far away a side is its average: about a fifth green.
+      let sideGreen = mix(select(0.0, 1.0, fringe), 0.2, blur);
+      base = select(dirt, mix(dirt, green, sideGreen), abs(in.normal.y) < 0.5);
+      base = select(base, green, in.normal.y > 0.5);
     }
     case 6u: {                                                                    // wheat
       let h = 0.25 + f32(stage) * 0.1;
@@ -404,8 +425,10 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     case 7u: {                                                                    // diamond ore
       // Stone with clusters of cyan gems in the texel grid, faintly glowing.
       let gem = hash3(floor(cellPos / 2.0) + vec3f(17.0, 5.0, 11.0)) > 0.6 && n > 0.35;
-      base = select(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gem);
-      emissive = select(0.0, 0.25, gem);
+      // Far away, the average: about a quarter gem.
+      let gems = mix(select(0.0, 1.0, gem), 0.25, blur);
+      base = mix(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gems);
+      emissive = 0.25 * gems;
     }
     default: { base = vec3f(1.0, 0.0, 1.0); }
   }
