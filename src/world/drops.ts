@@ -22,6 +22,18 @@ const LIFETIME = 300;
 const SIZE = 0.16;
 const COLOUR = [0.4, 1, 1];
 
+/** How many diamonds a diamond ore block drops: 1 to 4, fewer more often (40 / 30 / 20 / 10%), 2 on average. */
+export const DIAMOND_DROP_ODDS = [0.4, 0.3, 0.2, 0.1];
+
+export function diamondDropCount(rand = Math.random): number {
+  let r = rand();
+  for (let n = 0; n < DIAMOND_DROP_ODDS.length; n++) {
+    r -= DIAMOND_DROP_ODDS[n];
+    if (r < 0) return n + 1;
+  }
+  return DIAMOND_DROP_ODDS.length;
+}
+
 export class Drops {
   readonly items: Drop[] = [];
 

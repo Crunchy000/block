@@ -19,7 +19,7 @@ import { Simulation } from './sim/simulation';
 import { NOT_LOADED, ringSize, type CellStore } from './sim/store';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
 import { HOTBAR_BLOCKS, createHotbar } from './ui/hotbar';
-import { Drops } from './world/drops';
+import { Drops, diamondDropCount } from './world/drops';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
 import { generateMissing } from './world/loader';
 import { World, meshSlotCount } from './world/world';
@@ -375,7 +375,7 @@ async function main(): Promise<void> {
     if (digging.step(dt, controls.digging, target?.block, target?.type) && target) {
       world.setCell(...target.block, cell(Block.Air));
       nearby?.set(...target.block, Block.Air);
-      if (target.type === Block.Diamond) drops.spawn(...target.block);
+      if (target.type === Block.Diamond) for (let n = diamondDropCount(); n > 0; n--) drops.spawn(...target.block);
       edits++;
       hit = null;
     }

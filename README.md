@@ -22,8 +22,8 @@ Ctrl to fly faster) · left click break · right click place ·
 **Diamonds:** diamond ore (stone with cyan gems) runs in small blobs through the deep stone, at y 24 and below
 (sea level is 30), about 190 blocks a chunk: dig down, or look in caves. Digging takes a moment, as with a
 pickaxe: hold the button (or touch Break) and a ring around the crosshair fills; dirt goes in 0.35 s, stone 0.75 s,
-diamond ore 1.1 s, wheat at once (`src/player/digging.ts`). Diamond ore drops a diamond rather than the block: it
-pops out, falls, and flies to you once you're within 3 blocks (`src/world/drops.ts`, drawn as small spinning line
+diamond ore 1.1 s, wheat at once (`src/player/digging.ts`). Diamond ore drops 1 to 4 diamonds rather than the block (1, 2, 3 or 4 at 40 / 30 / 20 / 10%):
+they pop out, fall, and fly to you once you're within 3 blocks (`src/world/drops.ts`, drawn as small spinning line
 diamonds). The diamonds you've collected show at the end of the hotbar (kept between visits). Diamond ore is block
 type 7, the last of the 3 bits a cell has for its type, and is solid like stone everywhere (block updates,
 meshing, picking, collisions).

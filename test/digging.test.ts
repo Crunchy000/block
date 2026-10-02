@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Block } from '../src/constants';
 import { DIG_COOLDOWN, DIG_SECONDS, Digging } from '../src/player/digging';
 import { NOT_LOADED } from '../src/sim/store';
-import { Drops } from '../src/world/drops';
+import { DIAMOND_DROP_ODDS, Drops, diamondDropCount } from '../src/world/drops';
 
 const DT = 1 / 60;
 
@@ -43,6 +43,17 @@ describe('digging', () => {
 });
 
 describe('dropped items', () => {
+  it('diamond ore drops 1 to 4 diamonds, fewer more often', () => {
+    const counts = [0, 0, 0, 0, 0];
+    let seed = 1;
+    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 20000; i++) counts[diamondDropCount(rand)]++;
+    expect(counts[0]).toBe(0);
+    DIAMOND_DROP_ODDS.forEach((p, k) => expect(counts[k + 1] / 20000).toBeCloseTo(p, 1));
+    expect(diamondDropCount(() => 0)).toBe(1);
+    expect(diamondDropCount(() => 0.9999)).toBe(4);
+  });
+
   const floor = (_x: number, y: number) => (y < 10 ? Block.Stone : Block.Air);
 
   it('pop out of the block, fall and rest on the ground', () => {
