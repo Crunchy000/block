@@ -5,7 +5,7 @@ import { meshFaces, type ChunkFaces } from '../render/mesher';
 import { blockUpdateReference, cellRandom } from '../tf/blockUpdateReference';
 import { borderOf } from '../world/world';
 import {
-  AROUND, SELF, TickFlag, cellNear, slotOf, unprimed, type CellStore, type MeshJob, type MeshTarget, type StagedChunks,
+  AROUND, NOT_LOADED, SELF, TickFlag, cellNear, slotOf, unprimed, type CellStore, type MeshJob, type MeshTarget, type StagedChunks,
 } from './store';
 
 const P = CHUNK_SIZE + 2;
@@ -82,6 +82,24 @@ export class CpuStore implements CellStore {
 
   raycast(origin: readonly number[], dir: readonly number[], maxDist: number): Promise<RayHit | null> {
     return Promise.resolve(raycast((x, y, z) => cellType(this.cellAt(x, y, z)), origin, dir, maxDist));
+  }
+
+  readBox(min: readonly number[], size: readonly number[]): Promise<Uint8Array> {
+    const [sx, sy, sz] = size, out = new Uint8Array(sx * sy * sz);
+    for (let y = 0; y < sy; y++) {
+      for (let z = 0; z < sz; z++) {
+        for (let x = 0; x < sx; x++) {
+          const wx = min[0] + x, wy = min[1] + y, wz = min[2] + z;
+          out[(y * sz + z) * sx + x] = this.loadedAt(wx, wz) || wy < 0 || wy >= CHUNK_HEIGHT ? cellType(this.cellAt(wx, wy, wz)) : NOT_LOADED;
+        }
+      }
+    }
+    return Promise.resolve(out);
+  }
+
+  private loadedAt(x: number, z: number): boolean {
+    const cx = Math.floor(x / CHUNK_SIZE), cz = Math.floor(z / CHUNK_SIZE), slot = slotOf(cx, cz, this.ring);
+    return this.slotInfo[slot * 3] === cx && this.slotInfo[slot * 3 + 1] === cz && this.slotInfo[slot * 3 + 2] !== 0;
   }
 
   /** The cell at a world position: what picking sees (chunks that aren't loaded read as air). */

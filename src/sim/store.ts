@@ -19,6 +19,9 @@ import type { GenJob } from './gpuWorldgen';
  */
 export type { GenJob };
 
+/** readBox's value for a cell whose chunk isn't loaded. */
+export const NOT_LOADED = 255;
+
 export interface CellStore {
   /** Slots per side of the ring. */
   readonly ring: number;
@@ -44,6 +47,11 @@ export interface CellStore {
    * Resolves to a flags word per chunk (TickFlag).
    */
   tick(jobs: Uint32Array, seed: number, rates: PlantRates): Promise<Uint32Array>;
+  /**
+   * The block types (cell & 7) in a box of the world: `size` cells from `min`, x fastest, then
+   * z, then y. Chunks that aren't loaded read as NOT_LOADED. (The player's collisions.)
+   */
+  readBox(min: readonly number[], size: readonly number[]): Promise<Uint8Array>;
   /** The first solid block or plant along a ray (see player/raycast.ts). */
   raycast(origin: readonly number[], dir: readonly number[], maxDist: number): Promise<RayHit | null>;
   /** Mesh chunks into their mesh slots (see render/mesher.ts for the face records). */

@@ -53,12 +53,13 @@ export class TouchControls {
         return window.setInterval(() => this.controls.pushClick(0), BREAK_REPEAT_MS);
       }),
       this.holdButton('Place', 'place', 'Place block', () => this.controls.pushClick(2)),
-      this.holdButton('▲', 'fly-up', 'Fly up', () => this.setFly('up', true), () => this.setFly('up', false)),
-      this.holdButton('▼', 'fly-down', 'Fly down', () => this.setFly('down', true), () => this.setFly('down', false)),
+      this.holdButton('▲', 'fly-up', 'Jump, swim or fly up', () => this.setFly('up', true), () => this.setFly('up', false)),
+      this.holdButton('▼', 'fly-down', 'Fly down (when flying)', () => this.setFly('down', true), () => this.setFly('down', false)),
     );
 
     const toolbar = el('div', 'touch-toolbar');
     toolbar.append(
+      this.toggleButton('Fly', 'KeyF', 'Fly through blocks, or walk'),
       this.toggleButton('Outlines', 'KeyG', 'Toggle chunk and ghost-halo outlines'),
       this.toggleButton('Pause', 'KeyP', 'Pause block updates'),
       this.tapButton('Menu', 'Show the start screen', () => this.controls.stopTouch()),

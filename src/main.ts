@@ -4,6 +4,7 @@ import {
 } from './constants';
 import { log, logError } from './log';
 import { Controls } from './player/controls';
+import { EYE_HEIGHT, Nearby, overlaps } from './player/physics';
 import { TouchControls } from './player/touchControls';
 import type { RayHit } from './player/raycast';
 import { fpsView, frustum, multiply, perspective } from './render/math';
@@ -299,6 +300,23 @@ async function main(): Promise<void> {
       .finally(() => { picking = false; });
   };
 
+  // Collisions: the blocks around the player, read back from the world (24 KB) once the last
+  // read has arrived, a frame or two behind. A read issued before an edit is thrown away
+  // (the edit is applied to the last one instead), so a broken block never comes back.
+  const BOX = [16, 24, 16];
+  let nearby: Nearby | undefined;
+  let readingBox = false;
+  const readNearby = () => {
+    if (readingBox) return;
+    readingBox = true;
+    const p = controls.position, asked = edits;
+    const min = [Math.floor(p[0]) - BOX[0] / 2, Math.floor(p[1]) - 14, Math.floor(p[2]) - BOX[2] / 2];
+    store.readBox(min, BOX)
+      .then((types) => { if (asked === edits) nearby = new Nearby(min, BOX, types); })
+      .catch((e: unknown) => logError('Reading the blocks around the player failed', e))
+      .finally(() => { readingBox = false; });
+  };
+
   const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
       const slot = /^Digit([1-9])$/.exec(key);
@@ -306,16 +324,27 @@ async function main(): Promise<void> {
         selected = HOTBAR_BLOCKS[Number(slot[1]) - 1];
         hotbar.setSelected(selected);
       }
+      if (key === 'KeyF') {
+        controls.toggleFlying();
+        touchUI.setToggle(key, controls.flying);
+      }
       if (key === 'KeyG') touchUI.setToggle(key, showChunks = !showChunks);
       if (key === 'KeyP') touchUI.setToggle(key, paused = !paused);
     }
     for (const button of controls.takeClicks()) {
       if (!hit) continue;
       // y = 0 is bedrock: it holds up fluids at the bottom of the world.
-      if (button === 0 && hit.block[1] > 0) world.setCell(...hit.block, cell(Block.Air));
-      else if (button === 2) {
+      if (button === 0 && hit.block[1] > 0) {
+        world.setCell(...hit.block, cell(Block.Air));
+        nearby?.set(...hit.block, Block.Air);
+      } else if (button === 2) {
+        // Not a solid block where the player stands.
+        const [bx, by, bz] = hit.before, p = controls.position;
+        const inside = overlaps([p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => (x === bx && y === by && z === bz ? selected : Block.Air));
+        if (!controls.flying && inside) continue;
         const level = selected === Block.Water || selected === Block.Lava ? SOURCE_LEVEL : 0;
         world.setCell(...hit.before, cell(selected, level));
+        nearby?.set(...hit.before, selected);
       } else continue;
       edits++;
       hit = null;
@@ -363,7 +392,8 @@ async function main(): Promise<void> {
     last = now;
     fps = fps * 0.95 + (dt > 0 ? 1 / dt : 0) * 0.05;
 
-    controls.update(dt);
+    readNearby();
+    controls.update(dt, nearby && ((x, y, z) => nearby!.at(x, y, z)));
     const [px, py, pz] = controls.position;
     world.recenter(px, pz);
     pumpGeneration();
@@ -418,7 +448,7 @@ async function main(): Promise<void> {
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       far ? `far terrain: ${farLook}, out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
-      `placing: ${BLOCK_NAMES[selected]}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
+      `placing: ${BLOCK_NAMES[selected]}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
   };

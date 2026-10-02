@@ -127,6 +127,12 @@ export async function checkGpuStore(device: GPUDevice, seed = 1, ticks = 2, rays
         fail(`ray from ${origin.map((v) => v.toFixed(2))} along ${unit.map((v) => v.toFixed(3))}: ${JSON.stringify(got)}, expected ${JSON.stringify(want)}`);
       }
     }
+    // Box reads (collisions), across chunk borders, the unloaded chunk, and above and below the world.
+    for (const [min, size] of [[[-3, -2, -5], [16, 24, 16]], [[10, 50, 20], [9, 20, 13]], [[0, 0, 0], [RING * CHUNK_SIZE, 4, RING * CHUNK_SIZE]]]) {
+      const [got, want] = await Promise.all([gpu.readBox(min, size), cpu.readBox(min, size)]);
+      const i = want.findIndex((v, k) => v !== got[k]);
+      if (i >= 0 || got.length !== want.length) fail(`box read at ${min}: cell ${i} is ${got[i]}, expected ${want[i]}`);
+    }
   } catch (e) {
     fail(`failed to run: ${e instanceof Error ? e.message : String(e)}`);
   } finally {

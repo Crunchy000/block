@@ -14,15 +14,16 @@ npm run test:gpu   # everything on the GPU vs the reference, in headless Chromiu
 npm run build
 ```
 
-**Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD move ·
-Space / Shift up/down · Ctrl sprint · left click break · right click place ·
+**Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD walk ·
+Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (through blocks; Space / Shift up/down,
+Ctrl to fly faster) · left click break · right click place ·
 `1` dirt `2` stone `3` water `4` lava `5` grass `6` wheat · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
 **Touch (phones, tablets):** tap the start screen for on-screen controls. The left half of the screen
 is a **dynamic stick**: it appears wherever your thumb lands, is analog (push further to go faster),
-and disappears when you let go; double-tap and hold it to sprint. Drag on the right half to look around.
-Buttons: Break (hold to keep breaking), Place, ▲ / ▼ to fly, a hotbar to pick the block, and
-Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
+and disappears when you let go; double-tap and hold it to run. Drag on the right half to look around.
+Buttons: Break (hold to keep breaking), Place, ▲ to jump or swim up (▲ / ▼ up and down when flying), a
+hotbar to pick the block, and Fly / Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
 
 The bottom layer (y = 0) is unbreakable bedrock.
 
@@ -38,6 +39,12 @@ game is playable as soon as the area around you is loaded; the distance keeps lo
 the camera sees before the rest (so flying forward fills in what's ahead). Generated terrain is settled, so new
 chunks don't wake for block updates unless they or a neighbour were edited: moving costs only generating and
 meshing. Flying is 20 blocks a second, sprinting 80.
+
+**Walking:** you walk (4.5 blocks a second), run (7) and jump (1.25 blocks) with Minecraft's body size
+(0.6 × 1.8 blocks), collide with solid blocks, and swim in water and lava; `F` switches to flying. The world
+lives in GPU memory, so each frame the blocks around you (16 × 24 × 16) are read back, 24 KB arriving a frame
+or two later, and the physics (`src/player/physics.ts`) runs against those on the CPU. Chunks that aren't
+loaded yet count as solid, so you can't fall out of the world; if you end up inside a block you climb out.
 
 **Far terrain** (mist by default; silhouette, colour or off on the start screen, or `?far=silhouette` and so on): beyond the chunks, the land
 is drawn out to 2 km as one low-detail height field, in the spirit of Distant Horizons' level-of-detail chunks. The

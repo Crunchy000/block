@@ -6,7 +6,7 @@ import { GpuMesher } from '../render/gpuMesher';
 import { MeshPool } from '../render/meshPool';
 import { GpuWorldgen, type GenJob } from './gpuWorldgen';
 import { RULES_WGSL } from './rules';
-import { AROUND, SELF, TickFlag, type CellStore, type MeshJob, type MeshTarget, type StagedChunks } from './store';
+import { AROUND, NOT_LOADED, SELF, TickFlag, type CellStore, type MeshJob, type MeshTarget, type StagedChunks } from './store';
 
 const CHUNK_BYTES = CHUNK_VOLUME * 4;
 const WORKGROUP = 64;
@@ -197,6 +197,42 @@ class Readbacks {
   }
 }
 
+// The block types in a box of the world (CellStore.readBox): one thread per cell, one u32 each.
+const BOX_WGSL = /* wgsl */ `
+const S: i32 = ${CHUNK_SIZE};
+const H: i32 = ${CHUNK_HEIGHT};
+const VOLUME: i32 = ${CHUNK_VOLUME};
+
+struct Box {
+  min: vec3<i32>,
+  ring: i32,
+  size: vec3<i32>,
+  pad: i32,
+};
+@group(0) @binding(0) var<uniform> box: Box;
+@group(0) @binding(1) var<storage, read> cells: array<i32>;
+@group(0) @binding(2) var<storage, read> slots: array<vec4<i32>>;
+@group(0) @binding(3) var<storage, read_write> out: array<u32>;
+
+fn ringIndex(c: i32) -> i32 { return ((c % box.ring) + box.ring) % box.ring; }
+
+@compute @workgroup_size(${WORKGROUP})
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  let i = i32(id.x);
+  let n = box.size.x * box.size.y * box.size.z;
+  if (i >= n) { return; }
+  let p = box.min + vec3<i32>(i % box.size.x, i / (box.size.x * box.size.z), (i / box.size.x) % box.size.z);
+  if (p.y < 0) { out[i] = ${Block.Stone}u; return; }
+  if (p.y >= H) { out[i] = ${Block.Air}u; return; }
+  let cx = p.x >> 4u;
+  let cz = p.z >> 4u;
+  let slot = ringIndex(cz) * box.ring + ringIndex(cx);
+  let info = slots[slot];
+  if (info.x != cx || info.y != cz || info.z == 0) { out[i] = ${NOT_LOADED}u; return; }
+  out[i] = u32(cells[slot * VOLUME + (p.y * S + (p.z & 15)) * S + (p.x & 15)] & 7);
+}
+`;
+
 /**
  * The world's cells in GPU memory: one storage buffer holding every ring slot. Block
  * updates, meshing and picking all run there; per tick the CPU gets back one flags word
@@ -213,6 +249,10 @@ export class GpuStore implements CellStore {
   private readonly ray: GPUBuffer;
   private readonly rayResult: GPUBuffer;
   private readonly rayGroup: GPUBindGroup;
+  /** readBox: its uniforms, output, and their bind group (grown to the biggest box asked for). */
+  private readonly box: GPUBuffer;
+  private boxOut?: GPUBuffer;
+  private boxGroup?: GPUBindGroup;
   private readonly readbacks: Readbacks;
   /** Per-tick buffers, grown to the biggest batch so far. */
   private capacity = 0;
@@ -224,7 +264,7 @@ export class GpuStore implements CellStore {
   private constructor(
     readonly device: GPUDevice, readonly ring: number,
     private readonly simPipeline: GPUComputePipeline, private readonly rayPipeline: GPUComputePipeline,
-    private readonly mesher: GpuMesher, worldgen: GPUComputePipeline,
+    private readonly mesher: GpuMesher, worldgen: GPUComputePipeline, private readonly boxPipeline: GPUComputePipeline,
   ) {
     const slots = ring * ring;
     const storage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC;
@@ -232,6 +272,7 @@ export class GpuStore implements CellStore {
     this.slotInfo = device.createBuffer({ size: slots * 16, usage: storage });
     this.uniforms = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.ray = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.box = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.rayResult = device.createBuffer({ size: 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     this.rayGroup = device.createBindGroup({
       layout: rayPipeline.getBindGroupLayout(0),
@@ -252,10 +293,11 @@ export class GpuStore implements CellStore {
     const pipeline = (label: string, code: string) => device.createComputePipelineAsync({
       label, layout: 'auto', compute: { module: device.createShaderModule({ label, code }), entryPoint: 'main' },
     });
-    const [sim, ray, mesher, worldgen] = await Promise.all([
+    const [sim, ray, mesher, worldgen, box] = await Promise.all([
       pipeline('block updates', SIM_WGSL), pipeline('picking', RAY_WGSL), GpuMesher.create(device), GpuWorldgen.compile(device),
+      pipeline('box read', BOX_WGSL),
     ]);
-    return new GpuStore(device, ring, sim, ray, mesher, worldgen);
+    return new GpuStore(device, ring, sim, ray, mesher, worldgen, box);
   }
 
   /** Bytes of GPU memory the world's cells take. */
@@ -379,6 +421,29 @@ export class GpuStore implements CellStore {
     return r[0] ? { block: [r[1], r[2], r[3]], before: [r[4], r[5], r[6]] } : null;
   }
 
+  async readBox(min: readonly number[], size: readonly number[]): Promise<Uint8Array> {
+    const n = size[0] * size[1] * size[2];
+    if (!this.boxOut || this.boxOut.size < n * 4) {
+      this.boxOut?.destroy();
+      this.boxOut = this.device.createBuffer({ size: n * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+      this.boxGroup = this.device.createBindGroup({
+        layout: this.boxPipeline.getBindGroupLayout(0),
+        entries: [this.box, this.cells, this.slotInfo, this.boxOut].map((buffer, binding) => ({ binding, resource: { buffer } })),
+      });
+    }
+    this.device.queue.writeBuffer(this.box, 0, new Int32Array([min[0], min[1], min[2], this.ring, size[0], size[1], size[2], 0]));
+    const encoder = this.device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(this.boxPipeline);
+    pass.setBindGroup(0, this.boxGroup!);
+    pass.dispatchWorkgroups(Math.ceil(n / WORKGROUP));
+    pass.end();
+    const { buffer, read } = this.readbacks.take(n * 4);
+    encoder.copyBufferToBuffer(this.boxOut, 0, buffer, 0, n * 4);
+    this.device.queue.submit([encoder.finish()]);
+    return Uint8Array.from(new Uint32Array(await read()));
+  }
+
   mesh(jobs: MeshJob[], target: MeshTarget | undefined): Promise<void> {
     if (!target) return Promise.resolve();
     if (!(target instanceof MeshPool)) throw new Error('the GPU world meshes into a MeshPool');
@@ -386,7 +451,7 @@ export class GpuStore implements CellStore {
   }
 
   destroy(): void {
-    for (const b of [this.cells, this.slotInfo, this.uniforms, this.ray, this.rayResult, this.stepped, this.jobs, this.flags]) b?.destroy();
+    for (const b of [this.cells, this.slotInfo, this.uniforms, this.ray, this.rayResult, this.box, this.boxOut, this.stepped, this.jobs, this.flags]) b?.destroy();
     this.generator.destroy();
   }
 }
