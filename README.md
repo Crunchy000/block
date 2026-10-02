@@ -37,13 +37,13 @@ fetched only once play starts). It fades in when play starts (browsers only let 
 tap) and out on the start screen or when the tab is hidden; `M` or the touch Music button switch it off, remembered
 between visits (`src/ui/music.ts`).
 
-**Sound effects** (`src/ui/sounds.ts`, Web Audio): cows, pigs, sheep and chickens call now and then (recordings in
-`public/sounds/`, trimmed, levelled and mono, 33 KB together; the horse borrows the cow's, higher), and higher when
-hit; calls get quieter with distance and pan left or right of where you face. Everything else is synthesised on the
-spot from noise and tones, so there's nothing to download or credit: digging scrapes (dirt soft, stone sharp,
-diamond ore with a ping), a crunch and thump when a block breaks, a thud when you place one, footsteps (soft on
-grass and dirt, sharper on stone and concrete), a thud when you land from a fall, a splash into water and a chime
-when you pick up a diamond. `N` or the touch Sounds button switch them off (remembered).
+**Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono, 45 KB
+together) for animal calls (cows, pigs, sheep and chickens now and then, the horse borrowing the cow's higher;
+louder and higher when hit), a block breaking (higher for stone), footsteps (softer and lower on grass and dirt)
+and splashing into water, each at a slightly varied pitch so repeats differ. Sounds fade with distance and pan
+left or right of where you face. Synthesised on the spot from noise and tones: digging scrapes (dirt soft, stone
+sharp, diamond ore with a ping), placing a block, landing from a fall and the diamond pickup chime. `N` or the
+touch Sounds button switch them off (remembered).
 
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
 cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise unused; the 3 type

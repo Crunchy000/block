@@ -1,10 +1,11 @@
 import { Block } from '../constants';
 
 /**
- * Sound effects, through the Web Audio API. Animal calls are short recordings
- * (public/sounds/<animal>.mp3); everything else is made on the spot from noise and tones,
- * so there's nothing to download or credit: digging, breaking and placing blocks,
- * footsteps, landing, splashing into water, and picking up a diamond.
+ * Sound effects, through the Web Audio API. Animal calls, a block breaking, footsteps and
+ * a splash are short recordings (public/sounds/*.mp3, played at slightly varied pitch so
+ * repeats differ); the rest is made on the spot from noise and tones: digging scrapes,
+ * placing a block, landing, and picking up a diamond (and the recorded ones too, should a
+ * file fail to load).
  *
  * Sounds at a place in the world get quieter with distance and pan left or right of where
  * the player faces. Browsers only let a page start sound from a click or tap, so the audio
@@ -19,6 +20,8 @@ const CALLS: Record<string, { file: string; rate: number }> = {
   chicken: { file: 'chicken', rate: 1 },
   horse: { file: 'cow', rate: 1.45 },
 };
+/** Every recording to load. */
+const FILES = ['cow', 'pig', 'sheep', 'chicken', 'break', 'step', 'splash'];
 /** Sounds further away than this aren't heard. */
 const HEARING = 24;
 
@@ -54,12 +57,12 @@ export class Sounds {
       this.noise = this.ctx.createBuffer(1, n, n);
       const d = this.noise.getChannelData(0);
       for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
-      for (const file of new Set(Object.values(CALLS).map((c) => c.file))) {
+      for (const file of FILES) {
         fetch(new URL(`sounds/${file}.mp3`, document.baseURI))
           .then((r) => r.arrayBuffer())
           .then((data) => this.ctx!.decodeAudioData(data))
           .then((buffer) => this.samples.set(file, buffer))
-          .catch(() => { /* that animal stays quiet */ });
+          .catch(() => { /* not played (or synthesised instead) */ });
       }
     }
     void this.ctx.resume().catch(() => {});
@@ -155,9 +158,24 @@ export class Sounds {
     if (type === Block.Diamond) this.tone({ volume: 0.05, seconds: 0.08, from: 2600, to: 2400, type: 'triangle', at });
   }
 
-  /** A block breaking: a crunch and a thump. */
+  /** Play a recording, if loaded: returns false if it isn't (to synthesise instead). */
+  private sample(file: string, volume: number, rate: number, at?: readonly number[]): boolean {
+    const buffer = this.samples.get(file);
+    if (!buffer) return false;
+    const g = this.chain(volume, at);
+    if (!g) return true;
+    const src = this.ctx!.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = rate;
+    src.connect(g);
+    src.start();
+    return true;
+  }
+
+  /** A block breaking: the recorded crunch, higher for stone (or a synthesised crunch and thump). */
   breakBlock(type: Block, at: readonly number[]): void {
     const hard = type === Block.Stone || type === Block.Diamond;
+    if (this.sample('break', 0.8, (hard ? 1.1 : 0.85) * (0.95 + Math.random() * 0.1), at)) return;
     this.burst({ volume: 0.5, seconds: 0.18, filter: 'lowpass', freq: hard ? 3000 : 1400, sweepTo: 300, at });
     this.tone({ volume: 0.35, seconds: 0.12, from: hard ? 160 : 120, to: 60, at });
   }
@@ -171,6 +189,7 @@ export class Sounds {
   /** A footstep on a block of `type` (grass and dirt soft, stone sharper). */
   step(type: Block): void {
     const hard = type === Block.Stone || type === Block.Diamond;
+    if (this.sample('step', hard ? 0.5 : 0.4, (hard ? 1.15 : 0.9) * (0.92 + Math.random() * 0.16))) return;
     if (hard) this.burst({ volume: 0.16, seconds: 0.05, filter: 'bandpass', freq: 1700 + Math.random() * 500, q: 2 });
     else this.burst({ volume: 0.22, seconds: 0.07, filter: 'lowpass', freq: 600 + Math.random() * 300, q: 0.7 });
   }
@@ -184,6 +203,7 @@ export class Sounds {
 
   /** Falling or walking into water. */
   splash(): void {
+    if (this.sample('splash', 0.7, 0.95 + Math.random() * 0.1)) return;
     this.burst({ volume: 0.45, seconds: 0.35, filter: 'bandpass', freq: 1800, sweepTo: 400, q: 0.8 });
   }
 
@@ -201,14 +221,6 @@ export class Sounds {
   /** An animal's call, from where it stands (higher when it's been hit). */
   call(animal: string, at: readonly number[], hurt = false): void {
     const c = CALLS[animal];
-    const buffer = c && this.samples.get(c.file);
-    if (!buffer) return;
-    const g = this.chain(hurt ? 0.9 : 0.6, at);
-    if (!g) return;
-    const src = this.ctx!.createBufferSource();
-    src.buffer = buffer;
-    src.playbackRate.value = c.rate * (hurt ? 1.3 : 0.92 + Math.random() * 0.16);
-    src.connect(g);
-    src.start();
+    if (c) this.sample(c.file, hurt ? 0.9 : 0.6, c.rate * (hurt ? 1.3 : 0.92 + Math.random() * 0.16), at);
   }
 }
