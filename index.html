@@ -33,6 +33,8 @@
       #error { color: #ff8a80; max-width: 640px; margin: 0 auto 8px; }
       #error:empty { display: none; }
       .help { opacity: .8; }
+      .credits { margin-top: 14px; font-size: 11px; opacity: .7; }
+      .credits a { color: inherit; }
       .bench-link { display: inline-block; margin-top: 16px; padding: 7px 16px; border: 1px solid rgba(255,255,255,.45); border-radius: 8px; color: #fff; text-decoration: none; font-size: 13px; }
       .bench-link:hover, .bench-link:focus-visible { background: rgba(255,255,255,.15); }
       .view-distance { margin-top: 14px; font-size: 13px; }
@@ -111,6 +113,8 @@
         <a id="bench-link" class="bench-link" href="./bench.html?start">Benchmark this device: block updates per second</a>
         <a id="log-link" class="bench-link" href="./log.html">Logs from earlier visits (if the game crashed)</a>
         <a id="safe-link" class="bench-link" href="./?safe">Safe mode (if the game crashes on this device)</a>
+        <div id="credits" class="credits">Animals: <a href="https://sketchfab.com/3d-models/cube-farm-animals-b28b7fd5c1454e9d9327fd546463d79f">"Cube Farm Animals"</a>
+          by <a href="https://sketchfab.com/ezgibakim">ezgi bakim</a>, <a href="http://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></div>
       </div>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -1,0 +1,11 @@
+Model Information:
+* title:	Cube Farm Animals
+* source:	https://sketchfab.com/3d-models/cube-farm-animals-b28b7fd5c1454e9d9327fd546463d79f
+* author:	ezgi bakim (https://sketchfab.com/ezgibakim)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Cube Farm Animals" (https://sketchfab.com/3d-models/cube-farm-animals-b28b7fd5c1454e9d9327fd546463d79f) by ezgi bakim (https://sketchfab.com/ezgibakim) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

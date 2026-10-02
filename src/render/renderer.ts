@@ -27,7 +27,7 @@ export interface FarDraw {
   extent: number;
 }
 
-/** Mobs to draw: a model, and per mob 8 floats (x, y, z, yaw, waddle, bob, 0, 0; see world/pigs.ts). */
+/** Mobs of one kind to draw: a model, and per mob 8 floats (x, y, z, yaw, waddle, bob, middle height, 0; see world/animals.ts). */
 export interface MobDraw {
   model: MobModel;
   instances: Float32Array<ArrayBuffer>;
@@ -71,8 +71,7 @@ export class Renderer {
   private farGroup!: GPUBindGroup;
   private mobPipeline!: GPURenderPipeline;
   private mobLayout!: GPUBindGroupLayout;
-  private mobGroup?: GPUBindGroup;
-  private mobGroupFor?: GPUTexture;
+  private readonly mobGroups = new Map<GPUTexture, GPUBindGroup>();
   private mobInstances?: GPUBuffer;
   private mobSampler!: GPUSampler;
 
@@ -204,6 +203,7 @@ export class Renderer {
               { shaderLocation: 0, offset: 0, format: 'float32x3' },
               { shaderLocation: 1, offset: 12, format: 'float32x3' },
               { shaderLocation: 2, offset: 24, format: 'float32x2' },
+              { shaderLocation: 5, offset: 32, format: 'float32x4' },
             ],
           },
           {
@@ -306,7 +306,7 @@ export class Renderer {
    */
   render(
     viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>,
-    pool: MeshPool | ClassicMeshes, draws: ChunkDraw[], far?: FarDraw, mobs?: MobDraw,
+    pool: MeshPool | ClassicMeshes, draws: ChunkDraw[], far?: FarDraw, mobs: MobDraw[] = [],
   ): void {
     // A canvas throttles us to what the GPU can present; offscreen nothing does, and on a
     // slow GPU frames would pile up in the queue ahead of the block-update work. Skip
@@ -326,23 +326,27 @@ export class Renderer {
       this.lineBuffer = device.createBuffer({ size: Math.max(lines.byteLength, 1 << 16), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     }
     if (lines.length > 0) device.queue.writeBuffer(this.lineBuffer!, 0, lines);
-    const mobCount = mobs ? mobs.instances.length / 8 : 0;
-    if (mobs && mobCount > 0) {
-      if (!this.mobInstances || this.mobInstances.size < mobs.instances.byteLength) {
+    // All mobs' instances in one buffer, each kind a run of it.
+    const mobFloats = mobs.reduce((n, m) => n + m.instances.length, 0);
+    if (mobFloats > 0) {
+      if (!this.mobInstances || this.mobInstances.size < mobFloats * 4) {
         this.mobInstances?.destroy();
-        this.mobInstances = device.createBuffer({ size: Math.max(mobs.instances.byteLength, 32 * 16), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+        this.mobInstances = device.createBuffer({ size: Math.max(mobFloats * 4, 32 * 32), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
       }
-      device.queue.writeBuffer(this.mobInstances, 0, mobs.instances);
-      if (this.mobGroupFor !== mobs.model.texture) {
-        this.mobGroupFor = mobs.model.texture;
-        this.mobGroup = device.createBindGroup({
-          layout: this.mobLayout,
-          entries: [
-            { binding: 0, resource: { buffer: this.uniformBuffer } },
-            { binding: 1, resource: mobs.model.texture.createView() },
-            { binding: 2, resource: this.mobSampler },
-          ],
-        });
+      let at = 0;
+      for (const m of mobs) {
+        device.queue.writeBuffer(this.mobInstances, at * 4, m.instances);
+        at += m.instances.length;
+        if (!this.mobGroups.has(m.model.texture)) {
+          this.mobGroups.set(m.model.texture, device.createBindGroup({
+            layout: this.mobLayout,
+            entries: [
+              { binding: 0, resource: { buffer: this.uniformBuffer } },
+              { binding: 1, resource: m.model.texture.createView() },
+              { binding: 2, resource: this.mobSampler },
+            ],
+          }));
+        }
       }
     }
     if (far) device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([...far.near, far.seaY, ['colour', 'silhouette', 'mist'].indexOf(far.look), far.extent, 0]));
@@ -385,13 +389,18 @@ export class Renderer {
       pass.setBindGroup(0, this.groupFor(pool));
     }
 
-    if (mobs && mobCount > 0) {
+    if (mobFloats > 0) {
       pass.setPipeline(this.mobPipeline);
-      pass.setBindGroup(0, this.mobGroup!);
-      pass.setVertexBuffer(0, mobs.model.vertex);
       pass.setVertexBuffer(1, this.mobInstances!);
-      pass.setIndexBuffer(mobs.model.index, 'uint16');
-      pass.drawIndexed(mobs.model.indexCount, mobCount);
+      let first = 0;
+      for (const m of mobs) {
+        const count = m.instances.length / 8;
+        pass.setBindGroup(0, this.mobGroups.get(m.model.texture)!);
+        pass.setVertexBuffer(0, m.model.vertex);
+        pass.setIndexBuffer(m.model.index, 'uint16');
+        pass.drawIndexed(m.model.indexCount, count, 0, 0, first);
+        first += count;
+      }
       pass.setBindGroup(0, this.groupFor(pool));
     }
 

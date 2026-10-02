@@ -243,9 +243,9 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 `;
 
 /**
- * Mobs (the pig): a textured model, one instance per mob, placed by its feet position and
- * yaw, with a waddle (a roll along its length) and a bob while it walks. The blocks' sun
- * and fog.
+ * Mobs (the farm animals): a textured model, one instance per mob, placed by its feet
+ * position and yaw, with a waddle (a roll along its length, about its middle) and a bob
+ * while it walks. The blocks' sun and fog.
  */
 export const mobShader = /* wgsl */ `
 ${uniforms}
@@ -257,20 +257,20 @@ struct VSOut {
   @location(0) world: vec3f,
   @location(1) normal: vec3f,
   @location(2) uv: vec2f,
+  @location(3) colour: vec4f,
 };
-
-const MIDDLE: f32 = 0.45; // the waddle rolls about the body's middle height
 
 @vertex
 fn vs(
   @location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
   @location(3) place: vec4f, // feet position, yaw
-  @location(4) pose: vec4f,  // waddle (roll), bob
+  @location(4) pose: vec4f,  // waddle (roll), bob, middle height (the roll's pivot)
+  @location(5) colour: vec4f, // replaces the texture where alpha is 1
 ) -> VSOut {
   let cr = cos(pose.x);
   let sr = sin(pose.x);
-  let q = p - vec3f(0.0, MIDDLE, 0.0);
-  let rolled = vec3f(q.x * cr - q.y * sr, q.x * sr + q.y * cr + MIDDLE + pose.y, q.z);
+  let q = p - vec3f(0.0, pose.z, 0.0);
+  let rolled = vec3f(q.x * cr - q.y * sr, q.x * sr + q.y * cr + pose.z + pose.y, q.z);
   let rn = vec3f(n.x * cr - n.y * sr, n.x * sr + n.y * cr, n.z);
   // Yaw: the model faces -z, turned like the camera (forward = (-sin yaw, 0, -cos yaw)).
   let c = cos(place.w);
@@ -281,12 +281,13 @@ fn vs(
   o.world = world;
   o.normal = vec3f(rn.x * c + rn.z * s, rn.y, -rn.x * s + rn.z * c);
   o.uv = uv;
+  o.colour = colour;
   return o;
 }
 
 @fragment
 fn fs(in: VSOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
-  let base = textureSample(skin, skinSampler, in.uv).rgb;
+  let base = mix(textureSample(skin, skinSampler, in.uv).rgb, in.colour.rgb, in.colour.a);
   let normal = normalize(select(-in.normal, in.normal, front));
   let sun = normalize(vec3f(0.4, 0.85, 0.3));
   var lit = base * (0.6 + 0.4 * max(dot(normal, sun), 0.0));
