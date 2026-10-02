@@ -17,7 +17,7 @@ npm run build
 **Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD walk ·
 Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (through blocks; Space / Shift up/down,
 Ctrl to fly faster) · left click break · right click place ·
-`1`–`8` pastel concrete colours · `G` chunk / ghost-halo outlines · `P` pause block updates.
+`1`–`8` pastel concrete colours · `M` music on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
 **Farm animals:** up to 10 wander the grass around you: cows, sheep, pigs, chickens, horses, rabbits, cats and
 mice ("Cube Farm Animals" by [ezgi bakim](https://sketchfab.com/ezgibakim),
@@ -31,6 +31,11 @@ twice a second (40 × 28 × 40); they despawn 40 blocks away. The models come fr
 by `node scripts/convert-models.mjs` into `public/models/<animal>.bin` (80–190 KB each) sharing `farm.png`, and
 are drawn as instances of a textured mesh per kind (`src/render/mobModel.ts`, `mobShader`) with the blocks' light
 and fog, safe mode included.
+
+**Music:** "The Longest Afternoon" loops quietly while you play (`public/music/`, re-encoded at 128 kbps: 2.9 MB,
+fetched only once play starts). It fades in when play starts (browsers only let a page start sound from a click or
+tap) and out on the start screen or when the tab is hidden; `M` or the touch Music button switch it off, remembered
+between visits (`src/ui/music.ts`).
 
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
 cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise unused; the 3 type
@@ -50,7 +55,7 @@ meshing, picking, collisions).
 is a **dynamic stick**: it appears wherever your thumb lands, is analog (push further to go faster),
 and disappears when you let go; double-tap and hold it to run. Drag on the right half to look around.
 Buttons: Break (hold to dig), Place, ▲ to jump or swim up (▲ / ▼ up and down when flying), a
-hotbar to pick the colour, and Fly / Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
+hotbar to pick the colour, and Fly / Music / Outlines / Pause / Menu at the top right. You can move and look at the same time with two thumbs.
 
 The bottom layer (y = 0) is unbreakable bedrock.
 

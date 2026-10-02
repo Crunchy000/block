@@ -20,6 +20,7 @@ import { Simulation } from './sim/simulation';
 import { NOT_LOADED, ringSize, type CellStore } from './sim/store';
 import { fallbackBackend, initTensorflow, warmUpKernels } from './tf/backend';
 import { createHotbar } from './ui/hotbar';
+import { Music } from './ui/music';
 import { Drops, diamondDropCount } from './world/drops';
 import { Animals, SPECIES } from './world/animals';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
@@ -211,9 +212,16 @@ async function main(): Promise<void> {
   controls.flying = params.has('fly');
   if (params.has('yaw')) controls.yaw = Number(params.get('yaw'));
   if (params.has('pitch')) controls.pitch = Number(params.get('pitch'));
-  controls.onLockError = (message) => showError(`Couldn't capture the mouse: ${message} Click again to retry.`);
+  controls.onLockError = (message) => {
+    showError(`Couldn't capture the mouse: ${message} Click again to retry.`);
+    music.setPlaying(controls.playing);
+  };
   const touchUI = new TouchControls(controls);
+  // "The Longest Afternoon", looped while playing (M or the touch Music button switch it off).
+  const music = new Music('music/the-longest-afternoon.mp3');
+  touchUI.setToggle('KeyM', music.enabled);
   controls.onPlayingChange = (playing) => {
+    music.setPlaying(playing);
     overlay.classList.toggle('hidden', playing);
     document.body.classList.toggle('playing', playing);
     touchUI.setVisible(controls.touchPlaying);
@@ -237,6 +245,7 @@ async function main(): Promise<void> {
       document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
     }
     controls.start(type);
+    music.setPlaying(true); // within the click, which lets the page start sound
   });
   const touchFirst = matchMedia('(pointer: coarse)').matches;
 
@@ -361,7 +370,7 @@ async function main(): Promise<void> {
     .catch((e: unknown) => logError('Loading the animal models failed (no animals)', e));
   let animalHitCooldown = 0;
   // ?debug: the world, animals and controls on window.blockDebug, for poking at from the console (and scripted checks).
-  if (params.has('debug')) Object.assign(window, { blockDebug: { world, animals, controls } });
+  if (params.has('debug')) Object.assign(window, { blockDebug: { world, animals, controls, music } });
 
   const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
@@ -375,6 +384,7 @@ async function main(): Promise<void> {
         touchUI.setToggle(key, controls.flying);
       }
       if (key === 'KeyG') touchUI.setToggle(key, showChunks = !showChunks);
+      if (key === 'KeyM') touchUI.setToggle(key, music.toggle());
       if (key === 'KeyP') touchUI.setToggle(key, paused = !paused);
     }
     for (const button of controls.takeClicks()) {
@@ -536,7 +546,7 @@ async function main(): Promise<void> {
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       far ? `far terrain: ${farLook}, out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
-      `placing: ${CONCRETE_COLOURS[selected].name} concrete   diamonds: ${diamonds}   animals: ${animals.animals.length}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
+      `placing: ${CONCRETE_COLOURS[selected].name} concrete   diamonds: ${diamonds}   animals: ${animals.animals.length}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [M] music ${music.enabled ? 'on' : 'off'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
   };
