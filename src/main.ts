@@ -478,12 +478,16 @@ async function main(): Promise<void> {
     const b = controls.body, p = controls.position, feet = [p[0], p[1] - EYE_HEIGHT, p[2]];
     if (!before.inFluid && b.inFluid) sounds.splash();
     if (!before.onGround && b.onGround && before.fallSpeed > 7 && !b.inFluid) sounds.land(before.fallSpeed);
-    if (b.onGround && !b.inFluid) {
+    // A step every 2.5 blocks walked: on the block underfoot, or wading through water.
+    const at = (dy: number) => nearby?.at(Math.floor(feet[0]), Math.floor(feet[1] + dy), Math.floor(feet[2]));
+    const wading = b.inFluid && at(0.1) === Block.Water;
+    if ((b.onGround && !b.inFluid) || wading) {
       stepDistance += Math.hypot(feet[0] - before.feet[0], feet[2] - before.feet[2]);
       if (stepDistance > 2.5) {
         stepDistance = 0;
-        const under = nearby?.at(Math.floor(feet[0]), Math.floor(feet[1] - 0.05), Math.floor(feet[2]));
-        if (under !== undefined && under !== NOT_LOADED) sounds.step(under as Block);
+        const under = at(-0.05);
+        if (wading) sounds.wade();
+        else if (under !== undefined && under !== NOT_LOADED) sounds.step(under as Block);
       }
     }
   };

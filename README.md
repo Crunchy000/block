@@ -49,13 +49,15 @@ block tall at every stage, its texture showing it grow. Pastel concrete stays pl
 or if they fail to, blocks keep the earlier procedural look. Block edges get 4× multisample antialiasing
 (`?msaa=0` turns it off; safe mode leaves it off).
 
-**Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono, 43 KB
-together) for animal calls (cows, pigs, sheep and chickens now and then, the horse borrowing the cow's higher;
-louder and higher when hit), a block breaking (higher for stone) and splashing into water, each at a slightly
-varied pitch so repeats differ. Sounds fade with distance and pan left or right of where you face. Synthesised on
-the spot from noise and tones: digging scrapes (dirt soft, stone sharp, diamond ore with a ping), placing a block,
-a soft thud for landing from a fall and, quieter, for each footstep, and the diamond pickup chime. `N` or the touch
-Sounds button switch them off (remembered).
+**Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono)
+for animal calls (cows, pigs, sheep and chickens now and then, the horse borrowing the cow's higher; louder and
+higher when hit), a block breaking (higher for stone), footsteps every 2.5 blocks (on grass and dirt, on stone,
+concrete and ore, and wading through water) and splashing into water, each at a slightly varied pitch, the
+footsteps and splashes picking one of a few takes, so repeats differ. The footstep recordings' originals are in
+`assets/sounds/steps/`. Sounds fade with distance and pan left or right of where you face. Synthesised on the
+spot from noise and tones: digging scrapes (dirt soft, stone sharp, diamond ore with a ping), placing a block, a
+soft thud for landing from a fall, and the diamond pickup chime. `N` or the touch Sounds button switch them off
+(remembered).
 
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
 cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise unused; the 3 type

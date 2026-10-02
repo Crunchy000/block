@@ -1,10 +1,11 @@
 import { Block } from '../constants';
 
 /**
- * Sound effects, through the Web Audio API. Animal calls, a block breaking and a splash
- * are short recordings (public/sounds/*.mp3, played at slightly varied pitch so repeats
- * differ); the rest is made on the spot from noise and tones: digging scrapes, placing a
- * block, landing and footsteps (the same soft thud), and picking up a diamond (and the
+ * Sound effects, through the Web Audio API. Animal calls, a block breaking, footsteps
+ * (on grass, on stone, wading) and splashing into water are short recordings
+ * (public/sounds/*.mp3, played at slightly varied pitch so repeats differ; footsteps and
+ * splashes pick one of a few takes); the rest is made on the spot from noise and tones:
+ * digging scrapes, placing a block, landing (a soft thud), and picking up a diamond (and the
  * recorded ones too, should a file fail to load).
  *
  * Sounds at a place in the world get quieter with distance and pan left or right of where
@@ -20,8 +21,14 @@ const CALLS: Record<string, { file: string; rate: number }> = {
   chicken: { file: 'chicken', rate: 1 },
   horse: { file: 'cow', rate: 1.45 },
 };
+/** Takes of each footstep sound: public/sounds/step-<kind>-<n>.mp3, n from 1. */
+const STEPS = { grass: 3, hard: 2, water: 3 };
+type StepKind = keyof typeof STEPS;
 /** Every recording to load. */
-const FILES = ['cow', 'pig', 'sheep', 'chicken', 'break', 'splash'];
+const FILES = [
+  'cow', 'pig', 'sheep', 'chicken', 'break',
+  ...Object.entries(STEPS).flatMap(([kind, n]) => Array.from({ length: n }, (_, i) => `step-${kind}-${i + 1}`)),
+];
 /** Sounds further away than this aren't heard. */
 const HEARING = 24;
 
@@ -158,18 +165,33 @@ export class Sounds {
     if (type === Block.Diamond) this.tone({ volume: 0.05, seconds: 0.08, from: 2600, to: 2400, type: 'triangle', at });
   }
 
-  /** Play a recording, if loaded: returns false if it isn't (to synthesise instead). */
-  private sample(file: string, volume: number, rate: number, at?: readonly number[]): boolean {
+  /**
+   * Play a recording, if loaded: returns false if it isn't (to synthesise instead). Cut short,
+   * fading out, after `seconds` if given.
+   */
+  private sample(file: string, volume: number, rate: number, at?: readonly number[], seconds?: number): boolean {
     const buffer = this.samples.get(file);
     if (!buffer) return false;
     const g = this.chain(volume, at);
     if (!g) return true;
-    const src = this.ctx!.createBufferSource();
+    const ctx = this.ctx!, t = ctx.currentTime;
+    const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.playbackRate.value = rate;
     src.connect(g);
-    src.start();
+    src.start(t);
+    if (seconds) {
+      g.gain.setValueAtTime(g.gain.value, t + seconds * 0.4);
+      g.gain.linearRampToValueAtTime(0, t + seconds);
+      src.stop(t + seconds + 0.02);
+    }
     return true;
+  }
+
+  /** One take (at random) of a footstep sound; false if none is loaded. */
+  private footstep(kind: StepKind, volume: number, seconds?: number): boolean {
+    const n = 1 + Math.floor(Math.random() * STEPS[kind]);
+    return this.sample(`step-${kind}-${n}`, volume, 0.92 + Math.random() * 0.16, undefined, seconds);
   }
 
   /** A block breaking: the recorded crunch, higher for stone (or a synthesised crunch and thump). */
@@ -186,11 +208,17 @@ export class Sounds {
     this.burst({ volume: 0.2, seconds: 0.06, filter: 'lowpass', freq: 700, at });
   }
 
-  /** A footstep on a block of `type` (grass and dirt soft, stone sharper). */
+  /** A footstep on a block of `type`: grass (on grass and dirt), or hard (stone, concrete, ore). */
   step(type: Block): void {
-    // The landing thud, much softer, a little higher on stone and concrete, varied so steps differ.
     const hard = type === Block.Stone || type === Block.Diamond;
+    if (this.footstep(hard ? 'hard' : 'grass', hard ? 0.22 : 0.35)) return;
+    // (Not loaded: the landing thud, much softer.)
     this.thud(0.18, (hard ? 1.2 : 1) * (0.9 + Math.random() * 0.2));
+  }
+
+  /** A step wading through water: the start of a splash, quietly. */
+  wade(): void {
+    this.footstep('water', 0.3, 0.6);
   }
 
   /** Landing after a fall, louder the harder. */
@@ -206,7 +234,7 @@ export class Sounds {
 
   /** Falling or walking into water. */
   splash(): void {
-    if (this.sample('splash', 0.7, 0.95 + Math.random() * 0.1)) return;
+    if (this.footstep('water', 0.7)) return;
     this.burst({ volume: 0.45, seconds: 0.35, filter: 'bandpass', freq: 1800, sweepTo: 400, q: 0.8 });
   }
 
