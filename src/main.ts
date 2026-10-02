@@ -388,8 +388,8 @@ async function main(): Promise<void> {
 
   const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
-      const slot = /^Digit([0-9])$/.exec(key);
-      const index = slot ? (Number(slot[1]) + 9) % 10 : -1; // 1..9, then 0
+      const slot = /^Digit([1-9])$/.exec(key);
+      const index = slot ? Number(slot[1]) - 1 : -1;
       if (index >= 0 && index < BUILDING_BLOCKS.length) {
         selected = index;
         hotbar.setSelected(selected);

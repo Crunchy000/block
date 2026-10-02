@@ -10,9 +10,8 @@ export interface Hotbar {
 }
 
 /**
- * The building blocks along the bottom of the screen (pastel concrete in each colour, sand and
- * gravel), with the diamonds you've collected at the end. Tapping a slot selects it; keys 1–9
- * and 0 do the same.
+ * The building blocks along the bottom of the screen (pastel concrete in each colour), with
+ * the diamonds you've collected at the end. Tapping a slot selects it; keys 1–8 do the same.
  */
 export function createHotbar(onSelect: (index: number) => void, parent: HTMLElement = document.body): Hotbar {
   const bar = document.createElement('div');

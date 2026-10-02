@@ -77,13 +77,11 @@ export const GRAVEL = cell(Block.Stone, GRAVEL_LEVEL);
 export const concrete = (i: number): number => cell(Block.Stone, i + 1);
 export const cellType = (c: number): Block => (c & 7) as Block;
 export const cellLevel = (c: number): number => c >> 3;
-/** What the player can place (hotbar keys 1–9, 0): the concrete colours, then sand and gravel. */
+/** What the player can place (hotbar keys 1–8): the concrete colours. */
 export const BUILDING_BLOCKS: ReadonlyArray<{ name: string; cell: number; block: Block; swatch: string }> = [
   ...CONCRETE_COLOURS.map(({ name, rgb }, i) => ({
     name: `${name} concrete`, cell: concrete(i), block: Block.Stone, swatch: `rgb(${rgb.map((v) => Math.round(v * 255)).join(' ')})`,
   })),
-  { name: 'sand', cell: SAND, block: Block.Sand, swatch: 'url(textures/sand.png) center / cover' },
-  { name: 'gravel', cell: GRAVEL, block: Block.Gravel, swatch: 'url(textures/gravel.png) center / cover' },
 ];
 /** What block a cell is, for the game: its type, or Sand / Gravel for those (see Block.Sand). */
 export const blockId = (c: number): Block =>

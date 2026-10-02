@@ -46,9 +46,9 @@
         .help.keys { display: none; }
       }
 
-      /* Block hotbar (keys 1–9 and 0, or tap): 10 blocks and the diamonds, narrower to fit small screens. */
+      /* Block hotbar (keys 1–8, or tap): 8 blocks and the diamonds, narrower to fit small screens. */
       .hotbar { position: fixed; z-index: 3; left: 50%; bottom: calc(10px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex; gap: min(6px, 1vw); padding: 5px; background: rgba(0,0,0,.35); border-radius: 10px; }
-      .slot { position: relative; width: min(44px, calc((100vw - 40px) / 11 - 1vw)); height: min(44px, calc((100vw - 40px) / 11 - 1vw)); flex: none; padding: 0; border: 2px solid rgba(255,255,255,.25); border-radius: 7px; background: none; cursor: pointer; }
+      .slot { position: relative; width: min(44px, calc((100vw - 40px) / 9 - 1vw)); height: min(44px, calc((100vw - 40px) / 9 - 1vw)); flex: none; padding: 0; border: 2px solid rgba(255,255,255,.25); border-radius: 7px; background: none; cursor: pointer; }
       .slot.selected { border-color: #fff; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
       .swatch { position: absolute; inset: 5px; border-radius: 3px; image-rendering: pixelated; }
       .slot.item { margin-left: 8px; cursor: default; display: inline-block; box-sizing: border-box; }
@@ -104,7 +104,7 @@
         <div id="status">Loading…</div>
         <div id="error"></div>
         <div class="help keys">WASD walk · Space jump / swim · double-tap W (or Ctrl) run · F fly (Space/Shift up/down) · Esc release mouse<br />
-        Hold left click to dig (diamond ore drops diamonds) · Right click place · 1–8 pastel concrete colours, 9 sand, 0 gravel<br />
+        Hold left click to dig (diamond ore drops diamonds) · Right click place · 1–8 pastel concrete colours<br />
         M music on/off · N sounds on/off · G toggle chunk/ghost-halo outlines · P pause block updates</div>
         <div class="help touch">Left side: drag to walk (double-tap and hold to run)<br />
         Right side: drag to look · ▲ jump / swim · Fly button: fly (▲ ▼ up/down)<br />

@@ -17,7 +17,7 @@ npm run build
 **Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD walk ·
 Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (through blocks; Space / Shift up/down,
 Ctrl to fly faster) · left click break · right click place ·
-`1`–`8` pastel concrete colours, `9` sand, `0` gravel · `M` music on/off · `N` sounds on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
+`1`–`8` pastel concrete colours · `M` music on/off · `N` sounds on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
 **Farm animals:** up to 10 wander the grass around you: cows, sheep, pigs, chickens, horses, rabbits, cats and
 mice ("Cube Farm Animals" by [ezgi bakim](https://sketchfab.com/ezgibakim),
@@ -63,7 +63,7 @@ spot from noise and tones: placing a block and a soft thud for landing from a fa
 they load). `N` or the touch Sounds button switch them off (remembered).
 
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
-cream), and sand and gravel. Concrete is stone with its colour in the cell's level bits (stone's level is otherwise
+cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise
 unused; the 3 type bits are all taken), so it's solid like stone everywhere and digs like stone; the meshers pass the
 colour to the shader the way they pass a fluid's height. Sand and gravel are stone too, levels 9 and 10
 (`SAND_LEVEL`, `GRAVEL_LEVEL`): picking and the block boxes read back for walking report them as their own blocks
