@@ -17,7 +17,13 @@ npm run build
 **Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD walk ·
 Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (through blocks; Space / Shift up/down,
 Ctrl to fly faster) · left click break · right click place ·
-`1` dirt `2` stone `3` water `4` lava `5` grass `6` wheat · `G` chunk / ghost-halo outlines · `P` pause block updates.
+`1` dirt `2` stone `3` water `4` lava `5` grass `6` wheat `7` diamond · `G` chunk / ghost-halo outlines · `P` pause block updates.
+
+**Diamonds:** diamond ore (stone with cyan gems) runs in small blobs through the deep stone, at y 24 and below
+(sea level is 30), about 190 blocks a chunk: dig down, or look in caves. Breaking it collects a diamond; the
+count shows on the hotbar's diamond slot (kept between visits), and placing diamond ore spends one. Diamond ore
+is block type 7, the last of the 3 bits a cell has for its type, and is solid like stone everywhere (block
+updates, meshing, picking, collisions).
 
 **Touch (phones, tablets):** tap the start screen for on-screen controls. The left half of the screen
 is a **dynamic stick**: it appears wherever your thumb lands, is analog (push further to go faster),

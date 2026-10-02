@@ -89,6 +89,7 @@ const STONE: i32 = ${Block.Stone};
 const DIRT: i32 = ${Block.Dirt};
 const GRASS: i32 = ${Block.Grass};
 const WHEAT: i32 = ${Block.Wheat};
+const DIAMOND: i32 = ${Block.Diamond};
 const S: i32 = ${CHUNK_SIZE};
 const H: i32 = ${CHUNK_HEIGHT};
 const VOLUME: i32 = ${CHUNK_VOLUME};
@@ -139,10 +140,11 @@ fn main() {
   result[0] = 0;
   for (var k = 0; k < 4096 && t <= ray.maxDist; k++) {
     let b = blockAt(pos);
-    if (b == STONE || b == DIRT || b == GRASS || b == WHEAT) {
+    if (b == STONE || b == DIRT || b == GRASS || b == WHEAT || b == DIAMOND) {
       result[0] = 1;
       result[1] = pos.x; result[2] = pos.y; result[3] = pos.z;
       result[4] = prev.x; result[5] = prev.y; result[6] = prev.z;
+      result[7] = b;
       return;
     }
     prev = pos;
@@ -418,7 +420,7 @@ export class GpuStore implements CellStore {
     encoder.copyBufferToBuffer(this.rayResult, 0, buffer, 0, 32);
     this.device.queue.submit([encoder.finish()]);
     const r = new Int32Array(await read());
-    return r[0] ? { block: [r[1], r[2], r[3]], before: [r[4], r[5], r[6]] } : null;
+    return r[0] ? { block: [r[1], r[2], r[3]], before: [r[4], r[5], r[6]], type: r[7] } : null;
   }
 
   async readBox(min: readonly number[], size: readonly number[]): Promise<Uint8Array> {

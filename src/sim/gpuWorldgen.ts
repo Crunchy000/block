@@ -1,5 +1,5 @@
 import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, SEA_LEVEL, SOURCE_LEVEL, WHEAT_RIPE, cell } from '../constants';
-import { DEFAULT_SEED, WHEAT_PATCH_CHANCE } from '../tf/worldgen';
+import { DEFAULT_SEED, DIAMOND_MAX_Y, DIAMOND_THRESHOLD, WHEAT_PATCH_CHANCE } from '../tf/worldgen';
 
 /**
  * World generation as one compute shader, writing chunks straight into the world's slots.
@@ -127,9 +127,14 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) lid: vec
     let plant = fy == height + 1.0 && wheat;
     let solid = ground && !cave;
     let stone = (solid && !dirt) || y == 0;
+    var diamond = false;
+    if (stone && y > 0 && y <= ${DIAMOND_MAX_Y}) {
+      diamond = valueNoise3(wx / 3.0, fy / 3.0, wz / 3.0, seed + 333.0) > ${DIAMOND_THRESHOLD};
+    }
 
     var c = 0;
-    if (stone) { c += ${cell(Block.Stone)}; }
+    if (stone && !diamond) { c += ${cell(Block.Stone)}; }
+    if (diamond) { c += ${cell(Block.Diamond)}; }
     if (solid && dirt && y > 0 && !grass) { c += ${cell(Block.Dirt)}; }
     if (grass) { c += ${cell(Block.Grass)}; }
     if (water && y > 0) { c += ${cell(Block.Water, SOURCE_LEVEL)}; }

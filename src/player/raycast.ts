@@ -5,6 +5,8 @@ export interface RayHit {
   block: [number, number, number];
   /** Empty cell in front of the hit face (where a placed block goes). */
   before: [number, number, number];
+  /** The block type hit. */
+  type: Block;
 }
 
 /** Voxel DDA (Amanatides & Woo). Fluids are passed through; solid blocks and plants (wheat) are hit. */
@@ -25,7 +27,7 @@ export function raycast(
   while (t <= maxDist) {
     const b = getBlock(pos[0], pos[1], pos[2]);
     if (isSolid(b) || b === Block.Wheat) {
-      return { block: [pos[0], pos[1], pos[2]], before: [prev[0], prev[1], prev[2]] };
+      return { block: [pos[0], pos[1], pos[2]], before: [prev[0], prev[1], prev[2]], type: b };
     }
     prev = [...pos];
     const axis = tMax[0] < tMax[1] ? (tMax[0] < tMax[2] ? 0 : 2) : tMax[1] < tMax[2] ? 1 : 2;

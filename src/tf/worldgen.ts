@@ -14,6 +14,10 @@ export const DEFAULT_SEED = 1337;
  */
 export const GEN_BATCH = 16;
 
+/** Diamond ore: deep stone (y up to DIAMOND_MAX_Y) where 3D noise at a 3-block scale is above this. */
+export const DIAMOND_THRESHOLD = 0.82;
+export const DIAMOND_MAX_Y = 24;
+
 /** Chance that a 4x4-column area of dry land has a patch of wild wheat (at random growth stages). */
 export const WHEAT_PATCH_CHANCE = 1 / 256;
 
@@ -25,6 +29,7 @@ export const WHEAT_PATCH_CHANCE = 1 / 256;
  *   - terrain height from 2D fBm; dirt on the top 3 blocks, stone below
  *   - water sources fill everything between the terrain and SEA_LEVEL
  *   - 3D-noise caves carved under the surface; deep cave cells (y <= 10) become lava lakes
+ *   - diamond ore in small 3D-noise blobs through the deep stone (y <= DIAMOND_MAX_Y)
  *   - grass on top of dry land, and a few patches of ripe wild wheat
  *   (Generated terrain is settled: nothing in it flows, spreads or grows, so freshly
  *   loaded chunks go to sleep after one block-update tick. Water lies on the surface and
@@ -59,6 +64,9 @@ export function generateChunksTensor(coords: ChunkCoord[], seed = DEFAULT_SEED):
       .logicalAnd(y.less(height.sub(4)))
       .logicalAnd(y.greater(0));
     const lava = cave.logicalAnd(y.lessEqual(10));
+    // Diamond ore: small blobs through the deep stone.
+    const ore = valueNoise3(wx.div(3), y.div(3), wz.div(3), seed + 333).greater(DIAMOND_THRESHOLD)
+      .logicalAnd(y.lessEqual(DIAMOND_MAX_Y));
 
     const features = surfaceFeatures(wx, wz, height, seed);
     const grass = y.equal(height).logicalAnd(features.grass);
@@ -68,9 +76,11 @@ export function generateChunksTensor(coords: ChunkCoord[], seed = DEFAULT_SEED):
     const bedrock = y.equal(0), aboveBedrock = y.greater(0);
     const solid = ground.logicalAnd(cave.logicalNot());
     const stone = solid.logicalAnd(dirt.logicalNot()).logicalOr(bedrock);
+    const diamond = stone.logicalAnd(ore).logicalAnd(aboveBedrock);
     const term = (mask: tf.Tensor, value: number) => mask.cast('int32').mul(tf.scalar(value, 'int32'));
     return tf.addN([
-      term(stone, cell(Block.Stone)),
+      term(stone.logicalAnd(diamond.logicalNot()), cell(Block.Stone)),
+      term(diamond, cell(Block.Diamond)),
       term(solid.logicalAnd(dirt).logicalAnd(aboveBedrock).logicalAnd(grass.logicalNot()), cell(Block.Dirt)),
       term(grass, cell(Block.Grass)),
       term(water.logicalAnd(aboveBedrock), cell(Block.Water, SOURCE_LEVEL)),

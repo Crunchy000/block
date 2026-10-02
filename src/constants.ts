@@ -24,9 +24,11 @@ export const enum Block {
   Lava = 4,
   Grass = 5,
   Wheat = 6,
+  /** Diamond ore: deep in the stone, mined (broken) to collect diamonds. */
+  Diamond = 7,
 }
 
-export const BLOCK_NAMES = ['air', 'stone', 'dirt', 'water', 'lava', 'grass', 'wheat'] as const;
+export const BLOCK_NAMES = ['air', 'stone', 'dirt', 'water', 'lava', 'grass', 'wheat', 'diamond'] as const;
 
 /**
  * Level, stored in the high bits of a cell (cell = type + LEVEL_MUL * level).
@@ -78,7 +80,7 @@ export const isPlant = (c: number): boolean =>
 export const isGrowing = (c: number): boolean =>
   c === PRIMED_DIRT || (cellType(c) === Block.Wheat && cellLevel(c) < WHEAT_RIPE);
 
-export const isSolid = (t: Block): boolean => t === Block.Stone || t === Block.Dirt || t === Block.Grass;
+export const isSolid = (t: Block): boolean => t === Block.Stone || t === Block.Dirt || t === Block.Grass || t === Block.Diamond;
 export const isFluid = (t: Block): boolean => t === Block.Water || t === Block.Lava;
 
 /** Index into a chunk's data array; layout is [y][z][x] to match the [H, Z, X] tensors. */

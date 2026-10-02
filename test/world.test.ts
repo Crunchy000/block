@@ -325,7 +325,7 @@ describe('picking', () => {
     world.setCell(CHUNK_SIZE + 2, 5, 3, cell(Block.Dirt)); // in chunk (1, 0)
     world.setCell(CHUNK_SIZE + 1, 5, 3, cell(Block.Water, SOURCE_LEVEL)); // fluids are passed through
     const hit = await world.store.raycast([CHUNK_SIZE - 2.5, 5.5, 3.5], [1, 0, 0], 8);
-    expect(hit).toEqual({ block: [CHUNK_SIZE + 2, 5, 3], before: [CHUNK_SIZE + 1, 5, 3] });
+    expect(hit).toEqual({ block: [CHUNK_SIZE + 2, 5, 3], before: [CHUNK_SIZE + 1, 5, 3], type: Block.Dirt });
     // Straight down onto the stone floor.
     expect((await world.store.raycast([4.5, 9.5, 4.5], [0, -1, 0], 8))?.block).toEqual([4, 3, 4]);
     // The ring slot of chunk (3, 0) holds chunk (-2, 0): picking must not see it.

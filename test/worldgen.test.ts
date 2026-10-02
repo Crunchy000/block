@@ -4,7 +4,7 @@ import {
   Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, SEA_LEVEL, WHEAT_RIPE, blockIndex, cell, cellType,
 } from '../src/constants';
 import {
-  GEN_BATCH, WHEAT_PATCH_CHANCE, generateChunks, surfaceFeatures, type ChunkCoord,
+  DIAMOND_MAX_Y, GEN_BATCH, WHEAT_PATCH_CHANCE, generateChunks, surfaceFeatures, type ChunkCoord,
 } from '../src/tf/worldgen';
 
 beforeAll(async () => {
@@ -12,6 +12,26 @@ beforeAll(async () => {
 });
 
 describe('generateChunks', () => {
+  it('scatters lots of diamond ore through the deep stone', async () => {
+    const coords: ChunkCoord[] = Array.from({ length: GEN_BATCH }, (_, i) => ({ cx: i % 4 - 2, cz: Math.floor(i / 4) - 2 }));
+    const chunks = await generateChunks(coords);
+    let stone = 0, diamond = 0;
+    for (const c of chunks) {
+      c.forEach((v, i) => {
+        const t = cellType(v), y = Math.floor(i / (CHUNK_SIZE * CHUNK_SIZE));
+        if (t === Block.Diamond) {
+          diamond++;
+          expect(y).toBeGreaterThan(0);
+          expect(y).toBeLessThanOrEqual(DIAMOND_MAX_Y);
+        } else if (t === Block.Stone && y > 0 && y <= DIAMOND_MAX_Y) stone++;
+      });
+    }
+    // A few percent of the deep stone: well over a hundred a chunk.
+    expect(diamond / (diamond + stone)).toBeGreaterThan(0.02);
+    expect(diamond / (diamond + stone)).toBeLessThan(0.06);
+    expect(diamond / chunks.length).toBeGreaterThan(100);
+  });
+
   it('produces the materials, with plants placed on the ground', async () => {
     const coords: ChunkCoord[] = [];
     for (let cz = -3; cz <= 3; cz++) for (let cx = -3; cx <= 3; cx++) coords.push({ cx, cz });

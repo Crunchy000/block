@@ -1,4 +1,4 @@
-import { Block } from '../constants';
+import { Block, isSolid } from '../constants';
 import { NOT_LOADED } from '../sim/store';
 
 /** The player's box: Minecraft's size, eyes near the top. */
@@ -25,7 +25,7 @@ const SKIN = 1e-3;
 
 /** Blocks the body can't pass: solid blocks, and chunks not loaded yet (so nobody falls out of the world). */
 export const blocks = (type: number): boolean =>
-  type === Block.Stone || type === Block.Dirt || type === Block.Grass || type === NOT_LOADED;
+  isSolid(type) || type === NOT_LOADED;
 const isFluid = (type: number): boolean => type === Block.Water || type === Block.Lava;
 
 /** The block types around the player (read from the store with CellStore.readBox). */

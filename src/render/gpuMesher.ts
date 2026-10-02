@@ -21,6 +21,7 @@ const WATER: i32 = ${Block.Water};
 const LAVA: i32 = ${Block.Lava};
 const GRASS: i32 = ${Block.Grass};
 const WHEAT: i32 = ${Block.Wheat};
+const DIAMOND: i32 = ${Block.Diamond};
 const S: i32 = ${CHUNK_SIZE};
 const H: i32 = ${CHUNK_HEIGHT};
 const VOLUME: i32 = ${CHUNK_VOLUME};
@@ -48,7 +49,7 @@ fn cellAt(y: i32, z: i32, x: i32) -> i32 {
   return cells[i32(jobs[job + u32(gz * 3 + gx)]) * VOLUME + (y * S + z - (gz - 1) * S) * S + x - (gx - 1) * S];
 }
 fn typeOf(c: i32) -> i32 { return c & 7; }
-fn isSolid(t: i32) -> bool { return t == STONE || t == DIRT || t == GRASS; }
+fn isSolid(t: i32) -> bool { return t == STONE || t == DIRT || t == GRASS || t == DIAMOND; }
 fn heightCode(c: i32, above: i32) -> i32 {
   if (typeOf(above) == typeOf(c)) { return FULL_HEIGHT; }
   return clamp(c >> 3u, 1, SOURCE);

@@ -140,6 +140,12 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       base = mix(vec3f(0.30, 0.62, 0.20), vec3f(0.88, 0.74, 0.32), f32(stage) / 7.0) * (0.8 + 0.3 * n);
       if (ear) { base *= 0.85; }
     }
+    case 7u: {                                                                    // diamond ore
+      // Stone with clusters of cyan gems in the texel grid, faintly glowing.
+      let gem = hash3(floor(cellPos / 2.0) + vec3f(17.0, 5.0, 11.0)) > 0.6 && n > 0.35;
+      base = select(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gem);
+      emissive = select(0.0, 0.25, gem);
+    }
     default: { base = vec3f(1.0, 0.0, 1.0); }
   }
 
@@ -321,6 +327,12 @@ fn fs(in: VSOut) -> @location(0) vec4f {
       if (abs(fract(along * 4.0) - 0.5) > select(0.12, 0.3, ear)) { discard; }
       base = mix(vec3f(0.30, 0.62, 0.20), vec3f(0.88, 0.74, 0.32), f32(stage) / 7.0) * (0.8 + 0.3 * n);
       if (ear) { base *= 0.85; }
+    }
+    case 7u: {                                                                    // diamond ore
+      // Stone with clusters of cyan gems in the texel grid, faintly glowing.
+      let gem = hash3(floor(cellPos / 2.0) + vec3f(17.0, 5.0, 11.0)) > 0.6 && n > 0.35;
+      base = select(vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n), vec3f(0.30, 0.88, 0.92) * (0.8 + 0.4 * n), gem);
+      emissive = select(0.0, 0.25, gem);
     }
     default: { base = vec3f(1.0, 0.0, 1.0); }
   }

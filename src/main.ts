@@ -201,9 +201,10 @@ async function main(): Promise<void> {
     ...(params.has('spread') && { grassSpread: chance('spread') }),
     ...(params.has('grow') && { wheatGrow: chance('grow'), wheatGrowWet: chance('grow') }),
   });
-  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu
+  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)
   const pos = (params.get('pos') ?? '8,52,8').split(',').map(Number) as [number, number, number];
   const controls = new Controls(canvas, pos);
+  controls.flying = params.has('fly');
   if (params.has('yaw')) controls.yaw = Number(params.get('yaw'));
   if (params.has('pitch')) controls.pitch = Number(params.get('pitch'));
   controls.onLockError = (message) => showError(`Couldn't capture the mouse: ${message} Click again to retry.`);
@@ -263,6 +264,19 @@ async function main(): Promise<void> {
   const hotbar = createHotbar((block) => { selected = block; hotbar.setSelected(block); });
   hotbar.setSelected(selected);
   touchUI.setToggle('KeyG', showChunks);
+  touchUI.setToggle('KeyF', controls.flying);
+
+  // Diamonds mined (kept between visits, though edits to the world aren't yet).
+  const DIAMONDS_KEY = 'block.diamonds';
+  let diamonds = 0;
+  try { diamonds = Math.max(0, Number(localStorage.getItem(DIAMONDS_KEY)) || 0); } catch { /* storage blocked */ }
+  const setDiamonds = (n: number, mined: boolean) => {
+    diamonds = n;
+    hotbar.setCount(Block.Diamond, n);
+    if (mined) hotbar.flash(Block.Diamond);
+    try { localStorage.setItem(DIAMONDS_KEY, String(n)); } catch { /* storage blocked */ }
+  };
+  hotbar.setCount(Block.Diamond, diamonds);
   let lastTick = 0;
   let last = performance.now();
   let fps = 0;
@@ -337,11 +351,20 @@ async function main(): Promise<void> {
       if (button === 0 && hit.block[1] > 0) {
         world.setCell(...hit.block, cell(Block.Air));
         nearby?.set(...hit.block, Block.Air);
+        if (hit.type === Block.Diamond) setDiamonds(diamonds + 1, true);
       } else if (button === 2) {
         // Not a solid block where the player stands.
         const [bx, by, bz] = hit.before, p = controls.position;
         const inside = overlaps([p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => (x === bx && y === by && z === bz ? selected : Block.Air));
         if (!controls.flying && inside) continue;
+        // Diamond ore is placed from the diamonds you've mined.
+        if (selected === Block.Diamond) {
+          if (diamonds === 0) {
+            hotbar.flash(Block.Diamond);
+            continue;
+          }
+          setDiamonds(diamonds - 1, false);
+        }
         const level = selected === Block.Water || selected === Block.Lava ? SOURCE_LEVEL : 0;
         world.setCell(...hit.before, cell(selected, level));
         nearby?.set(...hit.before, selected);
@@ -448,7 +471,7 @@ async function main(): Promise<void> {
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       far ? `far terrain: ${farLook}, out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
-      `placing: ${BLOCK_NAMES[selected]}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
+      `placing: ${BLOCK_NAMES[selected]}   diamonds: ${diamonds}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
   };

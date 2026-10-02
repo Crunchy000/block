@@ -27,6 +27,7 @@ const WATER: i32 = ${Block.Water};
 const LAVA: i32 = ${Block.Lava};
 const GRASS: i32 = ${Block.Grass};
 const WHEAT: i32 = ${Block.Wheat};
+const DIAMOND: i32 = ${Block.Diamond};
 const LEVEL_MUL: i32 = ${LEVEL_MUL};
 const SOURCE: i32 = ${SOURCE_LEVEL};
 const FALLING: i32 = ${FALLING_LEVEL};
@@ -38,7 +39,7 @@ fn levelOf(c: i32) -> i32 { return c >> 3u; }
 fn fluidLevel(c: i32, fluid: i32) -> i32 { return select(0, levelOf(c), blockOf(c) == fluid); }
 fn isSolidCell(c: i32) -> bool {
   let t = blockOf(c);
-  return t == STONE || t == DIRT || t == GRASS;
+  return t == STONE || t == DIRT || t == GRASS || t == DIAMOND;
 }
 // Holds up fluid resting on it, and smothers grass under it.
 fn supportsCell(c: i32) -> bool { return isSolidCell(c) || levelOf(c) == SOURCE; }
