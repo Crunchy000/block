@@ -37,11 +37,12 @@ fetched only once play starts). It fades in when play starts (browsers only let 
 tap) and out on the start screen or when the tab is hidden; `M` or the touch Music button switch it off, remembered
 between visits (`src/ui/music.ts`).
 
-**Less shimmer far away:** block faces are textured in the shader (an 8 × 8 grid of randomly shaded texels), so
-there are no texture images to mipmap; the shader does the equivalent instead. It measures how many texels one
-pixel spans (from screen-space derivatives) and, once that passes about one, fades each texel's variation, the
-grass sides' green fringe and diamond ore's gems toward their averages, so distant blocks turn to steady colour
-instead of flickering as you turn (the far terrain's pattern too). Block edges get 4× multisample antialiasing
+**Less shimmer far away:** block faces are textured in the shader, so there are no texture images to mipmap; the
+shader builds the equivalent. A texel's shade is layered variation at 1, 2, 4 and 8 texels (the last a slight tint
+per block), and from how many texels a pixel covers (by its area, so ground seen at a low angle keeps its detail,
+as anisotropic filtering does) the layers finer than that fade out: a distant face shows its own pattern at lower
+resolution and, further still, its block's tint, like a mipmapped texture, instead of flickering as you turn. The
+grass fringe and diamond ore's gems average out the same way. Block edges get 4× multisample antialiasing
 (`?msaa=0` turns it off; safe mode leaves it off).
 
 **Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono, 43 KB

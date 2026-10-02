@@ -102,12 +102,24 @@ fn hash3(p: vec3f) -> f32 {
 fn fs(in: VSOut) -> @location(0) vec4f {
   // 8x8 "texel" grid on each face for a pixel-art look.
   let cellPos = floor((in.world - in.normal * 0.001) * 8.0);
-  // Filtering, the computed-texture equivalent of mipmaps: how many texels one pixel spans.
-  // Once that passes about one, each texel's random variation fades toward its average, so
-  // distant blocks don't flicker as the camera turns. (Derivatives first, before any discard.)
-  let span = max(length(dpdx(in.world)), length(dpdy(in.world))) * 8.0;
-  let blur = clamp((span - 0.6) / 1.4, 0.0, 1.0);
-  let n = mix(hash3(cellPos), 0.5, blur);
+  // A texel's shade is layered variation at 1, 2, 4 and 8 texels (the last a tint per block).
+  // That makes mip levels possible, as with a texture: how many texels a pixel spans (lod 0
+  // when one, 1 when two, ...) fades out the layers finer than that, so a distant face shows
+  // its own pattern at lower resolution and, further still, just its block's tint, rather
+  // than flickering as the camera turns. (Derivatives first, before any discard.)
+  // (By the pixel's area, not its longest side: ground seen at a low angle keeps its detail,
+  // as anisotropic filtering does for textures.)
+  let span = sqrt(length(dpdx(in.world)) * length(dpdy(in.world))) * 8.0;
+  let lod = log2(max(span, 0.001));
+  var amps = array<f32, 4>(0.62, 0.4, 0.3, 0.32);
+  var n = 0.5;
+  for (var k = 0; k < 4; k++) {
+    let size = f32(1 << u32(k));
+    let keep = 1.0 - clamp(lod - f32(k), 0.0, 1.0);
+    n += amps[k] * keep * (hash3(floor(cellPos / size) + vec3f(f32(k) * 37.0)) - 0.5);
+  }
+  n = clamp(n, 0.0, 1.0);
+  let blur = clamp(lod, 0.0, 1.0); // texel-sized details (grass fringe, diamond gems) average out from lod 0 to 1
   let t = u.camPos.w;
 
   var base: vec3f;
@@ -367,12 +379,24 @@ fn hash3(p: vec3f) -> f32 {
 fn fs(in: VSOut) -> @location(0) vec4f {
   // 8x8 "texel" grid on each face for a pixel-art look.
   let cellPos = floor((in.world - in.normal * 0.001) * 8.0);
-  // Filtering, the computed-texture equivalent of mipmaps: how many texels one pixel spans.
-  // Once that passes about one, each texel's random variation fades toward its average, so
-  // distant blocks don't flicker as the camera turns. (Derivatives first, before any discard.)
-  let span = max(length(dpdx(in.world)), length(dpdy(in.world))) * 8.0;
-  let blur = clamp((span - 0.6) / 1.4, 0.0, 1.0);
-  let n = mix(hash3(cellPos), 0.5, blur);
+  // A texel's shade is layered variation at 1, 2, 4 and 8 texels (the last a tint per block).
+  // That makes mip levels possible, as with a texture: how many texels a pixel spans (lod 0
+  // when one, 1 when two, ...) fades out the layers finer than that, so a distant face shows
+  // its own pattern at lower resolution and, further still, just its block's tint, rather
+  // than flickering as the camera turns. (Derivatives first, before any discard.)
+  // (By the pixel's area, not its longest side: ground seen at a low angle keeps its detail,
+  // as anisotropic filtering does for textures.)
+  let span = sqrt(length(dpdx(in.world)) * length(dpdy(in.world))) * 8.0;
+  let lod = log2(max(span, 0.001));
+  var amps = array<f32, 4>(0.62, 0.4, 0.3, 0.32);
+  var n = 0.5;
+  for (var k = 0; k < 4; k++) {
+    let size = f32(1 << u32(k));
+    let keep = 1.0 - clamp(lod - f32(k), 0.0, 1.0);
+    n += amps[k] * keep * (hash3(floor(cellPos / size) + vec3f(f32(k) * 37.0)) - 0.5);
+  }
+  n = clamp(n, 0.0, 1.0);
+  let blur = clamp(lod, 0.0, 1.0); // texel-sized details (grass fringe, diamond gems) average out from lod 0 to 1
   let t = u.camPos.w;
 
   var base: vec3f;
