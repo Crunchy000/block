@@ -17,7 +17,7 @@ npm run build
 **Keyboard & mouse:** click anywhere on the start screen to grab the mouse (Esc releases it) · WASD walk ·
 Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (through blocks; Space / Shift up/down,
 Ctrl to fly faster) · left click break · right click place ·
-`1`–`8` pastel concrete colours · `M` music on/off · `N` sounds on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
+`1`–`8` pastel concrete colours, `9` sand, `0` gravel · `M` music on/off · `N` sounds on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
 **Farm animals:** up to 10 wander the grass around you: cows, sheep, pigs, chickens, horses, rabbits, cats and
 mice ("Cube Farm Animals" by [ezgi bakim](https://sketchfab.com/ezgibakim),
@@ -37,7 +37,7 @@ fetched only once play starts). It fades in when play starts (browsers only let 
 tap) and out on the start screen or when the tab is hidden; `M` or the touch Music button switch it off, remembered
 between visits (`src/ui/music.ts`).
 
-**Block textures:** grass, dirt, stone, diamond ore, water (16 animation frames), lava (8) and wheat's eight
+**Block textures:** grass, dirt, stone, sand, gravel, diamond ore, water (16 animation frames), lava (8) and wheat's eight
 growth stages are from the [Baunilha](https://content.luanti.org/packages/Mirtilo/baunilha/) texture pack for
 Luanti by Mirtilo ([CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); credited on the start screen
 too). `scripts/convert-textures.mjs` turns the pack's PNGs (`assets/baunilha/`, with its licence) into one small
@@ -51,22 +51,29 @@ or if they fail to, blocks keep the earlier procedural look. Block edges get 4×
 
 **Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono)
 for animal calls (cows, pigs, sheep and chickens now and then, the horse borrowing the cow's higher; louder and
-higher when hit), a block breaking (higher for stone), footsteps every 2.5 blocks (on grass and dirt, on stone,
-concrete and ore, and wading through water) and splashing into water, each at a slightly varied pitch, the
-footsteps and splashes picking one of a few takes, so repeats differ. The footstep recordings' originals are in
-`assets/sounds/steps/`. Sounds fade with distance and pan left or right of where you face. Synthesised on the
-spot from noise and tones: digging scrapes (dirt soft, stone sharp, diamond ore with a ping), placing a block, a
-soft thud for landing from a fall, and the diamond pickup chime. `N` or the touch Sounds button switch them off
-(remembered).
+higher when hit), a block breaking (higher for stone; diamond ore shatters like glass), picking up a diamond (a
+coin chime), footsteps every 2.5 blocks (on grass and dirt, sand, gravel, and stone, concrete and ore, and wading
+through water) and splashing into water, each at a slightly varied pitch, several picking one of a few takes, so
+repeats differ. Those but the animals and the crunch are from AntumDeluge's
+[sounds](https://content.luanti.org/packages/AntumDeluge/sounds/) for Luanti, by several authors (CC0, CC BY 3.0
+and CC BY-SA 3.0: credited on the start screen, and per file in `assets/sounds/CREDITS.md`, with the originals in
+`assets/sounds/luanti/`). Sounds fade with distance and pan left or right of where you face. Synthesised on the
+spot from noise and tones: digging scrapes (dirt soft, stone sharp, diamond ore with a ping), placing a block and
+a soft thud for landing from a fall (and the recorded ones, until they load). `N` or the touch Sounds button
+switch them off (remembered).
 
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
-cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise unused; the 3 type
-bits are all taken), so it's solid like stone everywhere and digs like stone; the meshers pass the colour to the
-shader the way they pass a fluid's height.
+cream), and sand and gravel. Concrete is stone with its colour in the cell's level bits (stone's level is otherwise
+unused; the 3 type bits are all taken), so it's solid like stone everywhere and digs like stone; the meshers pass the
+colour to the shader the way they pass a fluid's height. Sand and gravel are stone too, levels 9 and 10
+(`SAND_LEVEL`, `GRAVEL_LEVEL`): picking and the block boxes read back for walking report them as their own blocks
+(`blockId`, `Block.Sand` / `Block.Gravel`), so they dig faster than stone and sound like sand and gravel underfoot.
+They don't fall (yet). World generation lays sand on beaches and shallow sea floors (ground from 3 below to 1 above
+sea level, without grass) and gravel on the deeper sea floor, in place of the top 3 blocks of dirt.
 
 **Diamonds:** diamond ore (stone with cyan gems) runs in small blobs through the deep stone, at y 24 and below
 (sea level is 30), about 190 blocks a chunk: dig down, or look in caves. Digging takes a moment, as with a
-pickaxe: hold the button (or touch Break) and a ring around the crosshair fills; dirt goes in 0.35 s, stone 0.75 s,
+pickaxe: hold the button (or touch Break) and a ring around the crosshair fills; sand 0.3 s, dirt 0.35 s, gravel 0.4 s, stone 0.75 s,
 diamond ore 1.1 s, wheat at once (`src/player/digging.ts`). Diamond ore drops 1 to 4 diamonds rather than the block (1, 2, 3 or 4 at 40 / 30 / 20 / 10%):
 they pop out, fall, and fly to you once you're within 3 blocks (`src/world/drops.ts`, drawn as small spinning line
 diamonds). The diamonds you've collected show at the end of the hotbar (kept between visits). Diamond ore is block
@@ -143,7 +150,7 @@ grass and wheat taking over the terrain around spawn and logs tick times.
 | Path | What |
 | --- | --- |
 | `src/constants.ts` | Chunk dims (16×16×64), block ids, cell encoding (`type + 8 * level`) |
-| `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sea-level water, 3D-noise caves, deep lava lakes, grass-topped land, ripe wild wheat |
+| `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sand beaches and gravel sea floors, sea-level water, 3D-noise caves, deep lava lakes, grass-topped land, ripe wild wheat (off for now) |
 | `src/world/farTerrain.ts` | Far terrain: the ground-height formula sampled on a widening grid around the player, drawn beyond the chunks |
 | `src/tf/noise.ts` | Value noise / fBm built from elementwise tensor ops |
 | `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`** (so worldgen output can be copied GPU to GPU); falls back to WebGL, then CPU; pre-compiles kernels |
@@ -241,7 +248,8 @@ All cells in the region update in parallel from the previous state:
 - **Wheat** grows through stages 0–7 with a chance per tick, faster with water beside it or its soil
   (Minecraft hydrates from 4 blocks away; here it's 1, so no rule looks more than one block sideways).
   It pops off without dirt or grass under it, and flowing fluid washes it away.
-- World generation tops dry land with grass and adds small patches of ripe wild wheat, and keeps
+- World generation tops dry land with grass (and can add small patches of ripe wild wheat, off for now:
+  `WILD_WHEAT`), and keeps
   lava away from water, so a fresh world is already settled: it sleeps after its first tick and
   only your edits wake it. Grass and wheat are also in the hotbar.
 

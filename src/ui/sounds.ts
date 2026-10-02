@@ -1,12 +1,13 @@
 import { Block } from '../constants';
 
 /**
- * Sound effects, through the Web Audio API. Animal calls, a block breaking, footsteps
- * (on grass, on stone, wading) and splashing into water are short recordings
- * (public/sounds/*.mp3, played at slightly varied pitch so repeats differ; footsteps and
- * splashes pick one of a few takes); the rest is made on the spot from noise and tones:
- * digging scrapes, placing a block, landing (a soft thud), and picking up a diamond (and the
- * recorded ones too, should a file fail to load).
+ * Sound effects, through the Web Audio API. Animal calls, a block breaking (diamond ore
+ * shattering), picking up a diamond, footsteps (on grass, sand, gravel and stone, and
+ * wading) and splashing into water are short recordings (public/sounds/*.mp3, played at
+ * slightly varied pitch so repeats differ; several pick one of a few takes); the rest is
+ * made on the spot from noise and tones: digging scrapes, placing a block and landing (a
+ * soft thud), and the recorded ones too should a file fail to load. The footsteps, diamond
+ * and pickup sounds are from AntumDeluge's "sounds" for Luanti: see assets/sounds/CREDITS.md.
  *
  * Sounds at a place in the world get quieter with distance and pan left or right of where
  * the player faces. Browsers only let a page start sound from a click or tap, so the audio
@@ -22,11 +23,11 @@ const CALLS: Record<string, { file: string; rate: number }> = {
   horse: { file: 'cow', rate: 1.45 },
 };
 /** Takes of each footstep sound: public/sounds/step-<kind>-<n>.mp3, n from 1. */
-const STEPS = { grass: 3, hard: 2, water: 3 };
+const STEPS = { grass: 3, hard: 2, sand: 1, gravel: 4, water: 3 };
 type StepKind = keyof typeof STEPS;
 /** Every recording to load. */
 const FILES = [
-  'cow', 'pig', 'sheep', 'chicken', 'break',
+  'cow', 'pig', 'sheep', 'chicken', 'break', 'diamond-break-1', 'diamond-break-2', 'diamond-break-3', 'pickup',
   ...Object.entries(STEPS).flatMap(([kind, n]) => Array.from({ length: n }, (_, i) => `step-${kind}-${i + 1}`)),
 ];
 /** Sounds further away than this aren't heard. */
@@ -194,9 +195,13 @@ export class Sounds {
     return this.sample(`step-${kind}-${n}`, volume, 0.92 + Math.random() * 0.16, undefined, seconds);
   }
 
-  /** A block breaking: the recorded crunch, higher for stone (or a synthesised crunch and thump). */
+  /**
+   * A block breaking: the recorded crunch, higher for stone; diamond ore shatters like glass
+   * (one of three takes). Or, not loaded, a synthesised crunch and thump.
+   */
   breakBlock(type: Block, at: readonly number[]): void {
     const hard = type === Block.Stone || type === Block.Diamond;
+    if (type === Block.Diamond && this.sample(`diamond-break-${1 + Math.floor(Math.random() * 3)}`, 0.6, 0.95 + Math.random() * 0.1, at)) return;
     if (this.sample('break', 0.8, (hard ? 1.1 : 0.85) * (0.95 + Math.random() * 0.1), at)) return;
     this.burst({ volume: 0.5, seconds: 0.18, filter: 'lowpass', freq: hard ? 3000 : 1400, sweepTo: 300, at });
     this.tone({ volume: 0.35, seconds: 0.12, from: hard ? 160 : 120, to: 60, at });
@@ -208,10 +213,11 @@ export class Sounds {
     this.burst({ volume: 0.2, seconds: 0.06, filter: 'lowpass', freq: 700, at });
   }
 
-  /** A footstep on a block of `type`: grass (on grass and dirt), or hard (stone, concrete, ore). */
+  /** A footstep on a block of `type`: grass (on grass and dirt), sand, gravel, or hard (stone, concrete, ore). */
   step(type: Block): void {
     const hard = type === Block.Stone || type === Block.Diamond;
-    if (this.footstep(hard ? 'hard' : 'grass', hard ? 0.22 : 0.35)) return;
+    const kind: StepKind = hard ? 'hard' : type === Block.Sand ? 'sand' : type === Block.Gravel ? 'gravel' : 'grass';
+    if (this.footstep(kind, hard ? 0.22 : kind === 'grass' ? 0.35 : 0.25)) return;
     // (Not loaded: the landing thud, much softer.)
     this.thud(0.18, (hard ? 1.2 : 1) * (0.9 + Math.random() * 0.2));
   }
@@ -238,8 +244,9 @@ export class Sounds {
     this.burst({ volume: 0.45, seconds: 0.35, filter: 'bandpass', freq: 1800, sweepTo: 400, q: 0.8 });
   }
 
-  /** A diamond picked up: a bright two-note chime. */
+  /** A diamond picked up: a recorded coin chime (or, not loaded, a bright two-note one). */
   pickup(): void {
+    if (this.sample('pickup', 0.45, 0.97 + Math.random() * 0.06)) return;
     this.tone({ volume: 0.18, seconds: 0.12, from: 1319, to: 1319, type: 'triangle' });
     this.tone({ volume: 0.18, seconds: 0.2, from: 1976, to: 1976, type: 'triangle', delay: 0.07 });
   }

@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import {
-  ACTIVE_RADIUS, Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, CONCRETE_COLOURS, DEFAULT_RATES, cell, concrete,
+  ACTIVE_RADIUS, BUILDING_BLOCKS, Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, DEFAULT_RATES, cell,
 } from './constants';
 import { log, logError } from './log';
 import { Controls } from './player/controls';
@@ -285,11 +285,11 @@ async function main(): Promise<void> {
   const gpuName = [info.vendor, info.architecture || info.device || info.description].filter(Boolean).join(' ') || 'unknown';
 
   let generating = false;
-  /** The concrete colour placed (an index into CONCRETE_COLOURS). */
+  /** The block placed (an index into BUILDING_BLOCKS). */
   let selected = 0;
   let showChunks = params.has('chunks');
   let paused = false;
-  const hotbar = createHotbar((colour) => { selected = colour; hotbar.setSelected(colour); });
+  const hotbar = createHotbar((index) => { selected = index; hotbar.setSelected(index); });
   hotbar.setSelected(selected);
   touchUI.setToggle('KeyG', showChunks);
   touchUI.setToggle('KeyF', controls.flying);
@@ -388,9 +388,10 @@ async function main(): Promise<void> {
 
   const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
-      const slot = /^Digit([1-9])$/.exec(key);
-      if (slot && Number(slot[1]) <= CONCRETE_COLOURS.length) {
-        selected = Number(slot[1]) - 1;
+      const slot = /^Digit([0-9])$/.exec(key);
+      const index = slot ? (Number(slot[1]) + 9) % 10 : -1; // 1..9, then 0
+      if (index >= 0 && index < BUILDING_BLOCKS.length) {
+        selected = index;
         hotbar.setSelected(selected);
       }
       if (key === 'KeyF') {
@@ -410,10 +411,11 @@ async function main(): Promise<void> {
         const [bx, by, bz] = hit.before, p = controls.position;
         const inside = overlaps([p[0], p[1] - EYE_HEIGHT, p[2]], (x, y, z) => (x === bx && y === by && z === bz ? Block.Stone : Block.Air));
         if (!controls.flying && inside) continue;
-        world.setCell(...hit.before, concrete(selected));
+        const placing = BUILDING_BLOCKS[selected];
+        world.setCell(...hit.before, placing.cell);
         sounds.placeBlock(hit.before.map((v) => v + 0.5));
-        nearby?.set(...hit.before, Block.Stone);
-        mobBlocks?.set(...hit.before, Block.Stone);
+        nearby?.set(...hit.before, placing.block);
+        mobBlocks?.set(...hit.before, placing.block);
       } else continue;
       edits++;
       hit = null;
@@ -608,7 +610,7 @@ async function main(): Promise<void> {
         : `world: on the CPU (${onCpu ? check.detail : `the GPU failed its check: ${check.detail}`})`,
       far ? `far terrain: ${farLook}, out to ${far.extent} blocks (${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB)` : 'far terrain: off',
       `block updates: ${blockUpdateStatus()}`,
-      `placing: ${CONCRETE_COLOURS[selected].name} concrete   diamonds: ${diamonds}   animals: ${animals.animals.length}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [M] music ${music.enabled ? 'on' : 'off'}   [N] sounds ${sounds.enabled ? 'on' : 'off'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
+      `placing: ${BUILDING_BLOCKS[selected].name}   diamonds: ${diamonds}   animals: ${animals.animals.length}   [F] ${controls.flying ? 'flying' : controls.body.inFluid ? 'swimming' : 'walking'}   [M] music ${music.enabled ? 'on' : 'off'}   [N] sounds ${sounds.enabled ? 'on' : 'off'}   [G] chunk outlines ${showChunks ? 'on' : 'off'}   [P] pause updates`,
       ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
   };

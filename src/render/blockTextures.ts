@@ -18,6 +18,8 @@ export const Layer = {
   LavaFrames: 8,
   /** Growth stages 0..7. */
   Wheat: 29,
+  Sand: 37,
+  Gravel: 38,
 } as const;
 
 /**

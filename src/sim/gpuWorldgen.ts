@@ -1,5 +1,5 @@
-import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, SEA_LEVEL, SOURCE_LEVEL, WHEAT_RIPE, cell } from '../constants';
-import { DEFAULT_SEED, DIAMOND_MAX_Y, DIAMOND_THRESHOLD, WHEAT_PATCH_CHANCE } from '../tf/worldgen';
+import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, GRAVEL, SAND, SEA_LEVEL, SOURCE_LEVEL, WHEAT_RIPE, cell } from '../constants';
+import { DEFAULT_SEED, DIAMOND_MAX_Y, DIAMOND_THRESHOLD, SAND_ABOVE, SAND_BELOW, WHEAT_PATCH_CHANCE, WILD_WHEAT } from '../tf/worldgen';
 
 /**
  * World generation as one compute shader, writing chunks straight into the world's slots.
@@ -102,12 +102,15 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) lid: vec
   let base = job.x * VOLUME + z * S + x;
   let seed = params.seed;
 
-  // The column: ground height (terrainHeight), then grass and wheat (surfaceFeatures).
+  // The column: ground height (terrainHeight), then grass, wheat, sand and gravel (surfaceFeatures).
   let continents = fbm2(wx, wz, seed, 128.0, 3);
   let hills = fbm2(wx, wz, seed + 17.0, 32.0, 4);
   let height = floor((continents - 0.5) * 36.0 + (hills - 0.5) * 14.0 + ${SEA_LEVEL + 2}.0);
   let dry = height >= SEA;
-  let wheat = dry && roll(floor(wx / 4.0), floor(wz / 4.0), params.patch1, params.patch2)
+  let sandy = height >= SEA - ${SAND_BELOW}.0 && height <= SEA + ${SAND_ABOVE}.0;
+  let gravelly = height < SEA - ${SAND_BELOW}.0;
+  let grassy = dry && !sandy;
+  let wheat = ${WILD_WHEAT} && grassy && roll(floor(wx / 4.0), floor(wz / 4.0), params.patch1, params.patch2)
     && hash12(wx, wz, params.plant) < 0.6;
 
   for (var y = 0; y < H; y++) {
@@ -123,7 +126,7 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) lid: vec
       cave = noise > 0.98;
     }
     let lava = cave && y <= 10;
-    let grass = fy == height && dry;
+    let grass = fy == height && grassy;
     let plant = fy == height + 1.0 && wheat;
     let solid = ground && !cave;
     let stone = (solid && !dirt) || y == 0;
@@ -135,7 +138,9 @@ fn main(@builtin(workgroup_id) wg: vec3u, @builtin(local_invocation_id) lid: vec
     var c = 0;
     if (stone && !diamond) { c += ${cell(Block.Stone)}; }
     if (diamond) { c += ${cell(Block.Diamond)}; }
-    if (solid && dirt && y > 0 && !grass) { c += ${cell(Block.Dirt)}; }
+    if (solid && dirt && y > 0 && !grass && !sandy && !gravelly) { c += ${cell(Block.Dirt)}; }
+    if (solid && dirt && y > 0 && sandy) { c += ${SAND}; }
+    if (solid && dirt && y > 0 && gravelly) { c += ${GRAVEL}; }
     if (grass) { c += ${cell(Block.Grass)}; }
     if (water && y > 0) { c += ${cell(Block.Water, SOURCE_LEVEL)}; }
     if (lava) { c += ${cell(Block.Lava, SOURCE_LEVEL)}; }

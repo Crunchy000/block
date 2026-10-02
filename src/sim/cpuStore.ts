@@ -1,5 +1,5 @@
 import type * as tf from '@tensorflow/tfjs';
-import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, cellType, isGrowing, type PlantRates } from '../constants';
+import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, blockId, isGrowing, type PlantRates } from '../constants';
 import { raycast, type RayHit } from '../player/raycast';
 import { meshFaces, type ChunkFaces } from '../render/mesher';
 import { blockUpdateReference, cellRandom } from '../tf/blockUpdateReference';
@@ -81,7 +81,7 @@ export class CpuStore implements CellStore {
   }
 
   raycast(origin: readonly number[], dir: readonly number[], maxDist: number): Promise<RayHit | null> {
-    return Promise.resolve(raycast((x, y, z) => cellType(this.cellAt(x, y, z)), origin, dir, maxDist));
+    return Promise.resolve(raycast((x, y, z) => blockId(this.cellAt(x, y, z)), origin, dir, maxDist));
   }
 
   readBox(min: readonly number[], size: readonly number[]): Promise<Uint8Array> {
@@ -90,7 +90,7 @@ export class CpuStore implements CellStore {
       for (let z = 0; z < sz; z++) {
         for (let x = 0; x < sx; x++) {
           const wx = min[0] + x, wy = min[1] + y, wz = min[2] + z;
-          out[(y * sz + z) * sx + x] = this.loadedAt(wx, wz) || wy < 0 || wy >= CHUNK_HEIGHT ? cellType(this.cellAt(wx, wy, wz)) : NOT_LOADED;
+          out[(y * sz + z) * sx + x] = this.loadedAt(wx, wz) || wy < 0 || wy >= CHUNK_HEIGHT ? blockId(this.cellAt(wx, wy, wz)) : NOT_LOADED;
         }
       }
     }

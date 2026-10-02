@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import type { WebGPUBackend } from '@tensorflow/tfjs-backend-webgpu';
-import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, type PlantRates } from '../constants';
+import { Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, GRAVEL, SAND, type PlantRates } from '../constants';
 import type { RayHit } from '../player/raycast';
 import { GpuMesher } from '../render/gpuMesher';
 import { MeshPool } from '../render/meshPool';
@@ -95,6 +95,15 @@ const H: i32 = ${CHUNK_HEIGHT};
 const VOLUME: i32 = ${CHUNK_VOLUME};
 const FAR: f32 = 1e30;
 
+// What block a cell is (constants.ts blockId): its type, or the ids of sand and gravel (stone levels).
+const SAND: i32 = ${Block.Sand};
+const GRAVEL: i32 = ${Block.Gravel};
+fn blockId(c: i32) -> i32 {
+  if (c == ${SAND}) { return SAND; }
+  if (c == ${GRAVEL}) { return GRAVEL; }
+  return c & 7;
+}
+
 struct Ray {
   origin: vec3f,
   maxDist: f32,
@@ -118,7 +127,7 @@ fn blockAt(p: vec3<i32>) -> i32 {
   let slot = ringIndex(cz) * ray.ring + ringIndex(cx);
   let info = slots[slot];
   if (info.x != cx || info.y != cz || info.z == 0) { return AIR; }
-  return cells[slot * VOLUME + (p.y * S + (p.z & 15)) * S + (p.x & 15)] & 7;
+  return blockId(cells[slot * VOLUME + (p.y * S + (p.z & 15)) * S + (p.x & 15)]);
 }
 
 @compute @workgroup_size(1)
@@ -140,7 +149,7 @@ fn main() {
   result[0] = 0;
   for (var k = 0; k < 4096 && t <= ray.maxDist; k++) {
     let b = blockAt(pos);
-    if (b == STONE || b == DIRT || b == GRASS || b == WHEAT || b == DIAMOND) {
+    if (b == STONE || b == DIRT || b == GRASS || b == WHEAT || b == DIAMOND || b == SAND || b == GRAVEL) {
       result[0] = 1;
       result[1] = pos.x; result[2] = pos.y; result[3] = pos.z;
       result[4] = prev.x; result[5] = prev.y; result[6] = prev.z;
@@ -201,6 +210,14 @@ class Readbacks {
 
 // The block types in a box of the world (CellStore.readBox): one thread per cell, one u32 each.
 const BOX_WGSL = /* wgsl */ `
+// What block a cell is (constants.ts blockId): its type, or the ids of sand and gravel (stone levels).
+const SAND: i32 = ${Block.Sand};
+const GRAVEL: i32 = ${Block.Gravel};
+fn blockId(c: i32) -> i32 {
+  if (c == ${SAND}) { return SAND; }
+  if (c == ${GRAVEL}) { return GRAVEL; }
+  return c & 7;
+}
 const S: i32 = ${CHUNK_SIZE};
 const H: i32 = ${CHUNK_HEIGHT};
 const VOLUME: i32 = ${CHUNK_VOLUME};
@@ -231,7 +248,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   let slot = ringIndex(cz) * box.ring + ringIndex(cx);
   let info = slots[slot];
   if (info.x != cx || info.y != cz || info.z == 0) { out[i] = ${NOT_LOADED}u; return; }
-  out[i] = u32(cells[slot * VOLUME + (p.y * S + (p.z & 15)) * S + (p.x & 15)] & 7);
+  out[i] = u32(blockId(cells[slot * VOLUME + (p.y * S + (p.z & 15)) * S + (p.x & 15)]));
 }
 `;
 

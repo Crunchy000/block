@@ -39,6 +39,8 @@ const layers = [
   ...frames(rgba('default_water_source_animated.png')).map((f, k) => [`water ${k}`, f]),
   ...frames(rgba('default_lava_source_animated.png')).map((f, k) => [`lava ${k}`, f]),
   ...[1, 2, 3, 4, 5, 6, 7, 8].map((s) => [`wheat ${s}`, rgba(`farming_wheat_${s}.png`)]),
+  ['sand', rgba('default_sand.png')],
+  ['gravel', rgba('default_gravel.png')],
 ];
 for (const [name, data] of layers) if (data.length !== SIZE * SIZE * 4) throw new Error(`${name}: not ${SIZE} x ${SIZE}`);
 

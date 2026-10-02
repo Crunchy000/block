@@ -1,6 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import {
-  Block, DEFAULT_RATES, FALLING_LEVEL, LAVA_DECAY, LEVEL_MUL, SOURCE_LEVEL, WATER_DECAY, WHEAT_RIPE,
+  Block, DEFAULT_RATES, FALLING_LEVEL, LAVA_DECAY, LEVEL_MUL, MAX_LEVEL, WATER_DECAY, WHEAT_RIPE,
   type PlantRates,
 } from '../constants';
 import {
@@ -28,8 +28,8 @@ import {
 //   - wheat grows a stage at a time (faster with water beside it or its soil), pops off
 //     without dirt or grass under it, and flowing fluid washes it away
 
-/** Every possible cell value: types 0..7 × levels 0..8. */
-const CELL_VALUES = LEVEL_MUL * (SOURCE_LEVEL + 1);
+/** Every possible cell value: types 0..7 × levels 0..MAX_LEVEL. */
+const CELL_VALUES = LEVEL_MUL * (MAX_LEVEL + 1);
 const table = (f: (c: number) => number | boolean) => Int32Array.from({ length: CELL_VALUES }, (_, c) => Number(f(c)));
 
 // Lookup tables indexed by cell value: one tf.gather replaces a chain of compare ops.

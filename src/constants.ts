@@ -26,14 +26,21 @@ export const enum Block {
   Wheat = 6,
   /** Diamond ore: deep in the stone, mined (broken) to collect diamonds. */
   Diamond = 7,
+  /**
+   * Sand and gravel aren't cell types (the 3 type bits are all taken): they're stone with
+   * level SAND_LEVEL or GRAVEL_LEVEL. Picking and CellStore.readBox report them as these
+   * (blockId), so the game can tell them apart from stone.
+   */
+  Sand = 8,
+  Gravel = 9,
 }
 
-export const BLOCK_NAMES = ['air', 'stone', 'dirt', 'water', 'lava', 'grass', 'wheat', 'diamond'] as const;
+export const BLOCK_NAMES = ['air', 'stone', 'dirt', 'water', 'lava', 'grass', 'wheat', 'diamond', 'sand', 'gravel'] as const;
 
 /**
  * Pastel concrete, the player's building blocks: stone with a colour in its level bits
- * (level 1..8; generated stone is level 0). Solid like stone everywhere; drawn smooth in
- * its colour. Up to 8 fit the block-update tables (cell values below LEVEL_MUL * 9).
+ * (level 1..8; generated stone is level 0; sand and gravel are 9 and 10). Solid like stone
+ * everywhere; drawn smooth in its colour. The block-update tables cover levels up to MAX_LEVEL.
  */
 export const CONCRETE_COLOURS: ReadonlyArray<{ name: string; rgb: [number, number, number] }> = [
   { name: 'pink', rgb: [0.96, 0.71, 0.76] },
@@ -57,11 +64,30 @@ export const FALLING_LEVEL = 7;
 export const WATER_DECAY = 1;
 export const LAVA_DECAY = 2;
 
+/** Sand and gravel: stone with these levels (after the concrete colours). */
+export const SAND_LEVEL = 9;
+export const GRAVEL_LEVEL = 10;
+/** The highest level any cell has. */
+export const MAX_LEVEL = GRAVEL_LEVEL;
+
 export const cell = (type: Block, level = 0): number => type + LEVEL_MUL * level;
+export const SAND = cell(Block.Stone, SAND_LEVEL);
+export const GRAVEL = cell(Block.Stone, GRAVEL_LEVEL);
 /** The cell of pastel concrete colour `i` (an index into CONCRETE_COLOURS). */
 export const concrete = (i: number): number => cell(Block.Stone, i + 1);
 export const cellType = (c: number): Block => (c & 7) as Block;
 export const cellLevel = (c: number): number => c >> 3;
+/** What the player can place (hotbar keys 1–9, 0): the concrete colours, then sand and gravel. */
+export const BUILDING_BLOCKS: ReadonlyArray<{ name: string; cell: number; block: Block; swatch: string }> = [
+  ...CONCRETE_COLOURS.map(({ name, rgb }, i) => ({
+    name: `${name} concrete`, cell: concrete(i), block: Block.Stone, swatch: `rgb(${rgb.map((v) => Math.round(v * 255)).join(' ')})`,
+  })),
+  { name: 'sand', cell: SAND, block: Block.Sand, swatch: 'url(textures/sand.png) center / cover' },
+  { name: 'gravel', cell: GRAVEL, block: Block.Gravel, swatch: 'url(textures/gravel.png) center / cover' },
+];
+/** What block a cell is, for the game: its type, or Sand / Gravel for those (see Block.Sand). */
+export const blockId = (c: number): Block =>
+  c === SAND ? Block.Sand : c === GRAVEL ? Block.Gravel : cellType(c);
 
 /**
  * Dirt that grass can spread onto this tick: air above it and living grass in reach.
@@ -98,7 +124,8 @@ export const isPlant = (c: number): boolean =>
 export const isGrowing = (c: number): boolean =>
   c === PRIMED_DIRT || (cellType(c) === Block.Wheat && cellLevel(c) < WHEAT_RIPE);
 
-export const isSolid = (t: Block): boolean => t === Block.Stone || t === Block.Dirt || t === Block.Grass || t === Block.Diamond;
+export const isSolid = (t: Block): boolean =>
+  t === Block.Stone || t === Block.Dirt || t === Block.Grass || t === Block.Diamond || t === Block.Sand || t === Block.Gravel;
 export const isFluid = (t: Block): boolean => t === Block.Water || t === Block.Lava;
 
 /** Index into a chunk's data array; layout is [y][z][x] to match the [H, Z, X] tensors. */

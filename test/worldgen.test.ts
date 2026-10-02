@@ -1,10 +1,10 @@
 import * as tf from '@tensorflow/tfjs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, SEA_LEVEL, WHEAT_RIPE, blockIndex, cell, cellType,
+  Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, GRAVEL, SAND, SEA_LEVEL, WHEAT_RIPE, blockId, blockIndex, cell, cellType,
 } from '../src/constants';
 import {
-  DIAMOND_MAX_Y, GEN_BATCH, WHEAT_PATCH_CHANCE, generateChunks, surfaceFeatures, type ChunkCoord,
+  DIAMOND_MAX_Y, GEN_BATCH, SAND_ABOVE, SAND_BELOW, WHEAT_PATCH_CHANCE, WILD_WHEAT, generateChunks, surfaceFeatures, type ChunkCoord,
 } from '../src/tf/worldgen';
 
 beforeAll(async () => {
@@ -124,6 +124,35 @@ describe('surfaceFeatures', () => {
     const { grass, wheat } = area(SEA_LEVEL - 1);
     expect(grass.some((v) => v)).toBe(false);
     expect(wheat.some((v) => v)).toBe(false);
+  });
+});
+
+describe('sand and gravel', () => {
+  const column = (groundY: number) => {
+    const f = surfaceFeatures(tf.zeros([1, 1, 1, 1]), tf.zeros([1, 1, 1, 1]), tf.fill([1, 1, 1, 1], groundY), 1337);
+    return { grass: f.grass.dataSync()[0], sand: f.sand.dataSync()[0], gravel: f.gravel.dataSync()[0], bare: f.bare.dataSync()[0] };
+  };
+
+  it('makes beaches and shallow sea floors sand, deeper sea floors gravel, the rest dirt', () => {
+    expect(column(SEA_LEVEL + SAND_ABOVE + 1)).toEqual({ grass: 1, sand: 0, gravel: 0, bare: 1 });
+    expect(column(SEA_LEVEL + SAND_ABOVE)).toEqual({ grass: 0, sand: 1, gravel: 0, bare: 0 });
+    expect(column(SEA_LEVEL - SAND_BELOW)).toEqual({ grass: 0, sand: 1, gravel: 0, bare: 0 });
+    expect(column(SEA_LEVEL - SAND_BELOW - 1)).toEqual({ grass: 0, sand: 0, gravel: 1, bare: 0 });
+  });
+
+  it('generates them in place of the top dirt, and no wild wheat while it is off', async () => {
+    const chunks = await generateChunks([{ cx: 0, cz: 0 }, { cx: 3, cz: -2 }, { cx: -5, cz: 7 }, { cx: 9, cz: 9 }]);
+    const ids = new Set(chunks.flatMap((c) => Array.from(c, blockId)));
+    expect(ids.has(Block.Sand) || ids.has(Block.Gravel)).toBe(true);
+    if (!WILD_WHEAT) expect(ids.has(Block.Wheat)).toBe(false);
+  });
+
+  it('reads as their own blocks, though stored as stone', () => {
+    expect(cellType(SAND)).toBe(Block.Stone);
+    expect(blockId(SAND)).toBe(Block.Sand);
+    expect(blockId(GRAVEL)).toBe(Block.Gravel);
+    expect(blockId(cell(Block.Stone))).toBe(Block.Stone);
+    expect(blockId(cell(Block.Water, 8))).toBe(Block.Water);
   });
 });
 

@@ -4,6 +4,8 @@ import { Block } from '../constants';
 export const DIG_SECONDS: Partial<Record<Block, number>> = {
   [Block.Wheat]: 0,
   [Block.Dirt]: 0.35,
+  [Block.Sand]: 0.3,
+  [Block.Gravel]: 0.4,
   [Block.Grass]: 0.4,
   [Block.Stone]: 0.75,
   [Block.Diamond]: 1.1,

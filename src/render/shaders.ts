@@ -1,4 +1,5 @@
-import { Block, CONCRETE_COLOURS, FALLING_LEVEL, SOURCE_LEVEL } from '../constants';
+import { Block, CONCRETE_COLOURS, FALLING_LEVEL, GRAVEL_LEVEL, SAND_LEVEL, SEA_LEVEL, SOURCE_LEVEL } from '../constants';
+import { SAND_ABOVE } from '../tf/worldgen';
 import { Layer } from './blockTextures';
 import { FACE_CORNERS, FACE_NORMALS, FULL_HEIGHT, Face, PLANT_QUADS } from './mesher';
 
@@ -21,7 +22,14 @@ fn hash3(p: vec3f) -> f32 {
 // Which texture layer a face shows (Layer in render/blockTextures.ts), or -1 for none (concrete).
 fn layerFor(kind: u32, normal: vec3f, t: f32) -> i32 {
   switch kind & 15u {
-    case 1u: { return select(-1, ${Layer.Stone}, (kind >> 4u) == 0u); }
+    case 1u: {                                    // stone; sand and gravel (stone levels); not concrete
+      switch kind >> 4u {
+        case 0u: { return ${Layer.Stone}; }
+        case ${SAND_LEVEL}u: { return ${Layer.Sand}; }
+        case ${GRAVEL_LEVEL}u: { return ${Layer.Gravel}; }
+        default: { return -1; }
+      }
+    }
     case 2u: { return ${Layer.Dirt}; }
     case 3u: { return ${Layer.Water} + i32(u32(t * 8.0) % ${Layer.WaterFrames}u); }
     case 4u: { return ${Layer.Lava} + i32(u32(t * 2.5) % ${Layer.LavaFrames}u); }
@@ -91,9 +99,13 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     }
   } else {
   switch in.kind & 15u {
-    case 1u: {                                                                    // stone, or pastel concrete
+    case 1u: {                                                                    // stone, sand, gravel, or pastel concrete
       if (stage == 0u) {
         base = vec3f(0.50, 0.50, 0.52) * (0.85 + 0.3 * n);
+      } else if (stage == ${SAND_LEVEL}u) {
+        base = vec3f(0.86, 0.80, 0.58) * (0.9 + 0.2 * n);
+      } else if (stage == ${GRAVEL_LEVEL}u) {
+        base = vec3f(0.52, 0.50, 0.49) * (0.7 + 0.5 * n);
       } else {
         var concrete = array<vec3f, ${CONCRETE_COLOURS.length}>(${CONCRETE_COLOURS.map((c) => `vec3f(${c.rgb.join(', ')})`).join(', ')});
         base = concrete[min(stage, ${CONCRETE_COLOURS.length}u) - 1u] * (0.97 + 0.05 * n); // smooth, matte
@@ -319,6 +331,9 @@ fn fs(in: VSOut) -> @location(0) vec4f {
     let green = vec3f(0.36, 0.62, 0.22) * (0.85 + 0.2 * n);
     let dirt = vec3f(0.55, 0.38, 0.24) * (0.85 + 0.2 * n);
     base = mix(dirt, green, smoothstep(0.55, 0.8, normal.y));
+    // Sand on beaches (ground up to SAND_ABOVE over sea level: its top at SEA_LEVEL + SAND_ABOVE + 1).
+    let sand = vec3f(0.86, 0.80, 0.58) * (0.85 + 0.2 * n);
+    base = mix(base, sand, 1.0 - smoothstep(${SEA_LEVEL + SAND_ABOVE + 1}.0, ${SEA_LEVEL + SAND_ABOVE + 1}.6, in.world.y));
   }
 
   let diffuse = max(dot(normal, sun), 0.0);
