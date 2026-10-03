@@ -2,12 +2,13 @@ import { Block } from '../constants';
 
 /**
  * Sound effects, through the Web Audio API. Animal calls, digging and digging out blocks
- * (by what they're made of), footsteps (on grass, sand, gravel and stone, and wading) and
- * splashing into water are short recordings (public/sounds/*.mp3, played at slightly varied
- * pitch so repeats differ; most pick one of a few takes); the rest is made on the spot from
- * noise and tones: placing a block and landing (a soft thud), and the recorded ones too
- * should a file fail to load. All but the animals are from AntumDeluge's "sounds" for
- * Luanti: see assets/sounds/CREDITS.md.
+ * (a pickaxe on stone, concrete and ore; soft thumps in everything else), placing a block,
+ * footsteps (on grass and dirt, sand, gravel and stone), splashing into water and wading are
+ * short recordings (public/sounds/*.mp3, played at slightly varied pitch so repeats differ;
+ * most pick one of five takes): Kenney's "Impact Sounds" and "RPG Audio" (CC0; made by
+ * scripts/convert-sounds.mjs), and recordings of the animals and the splash. Landing from a
+ * fall is a soft thud made on the spot from noise and a tone, as are the others should a file
+ * fail to load.
  *
  * Sounds at a place in the world get quieter with distance and pan left or right of where
  * the player faces. Browsers only let a page start sound from a click or tap, so the audio
@@ -22,14 +23,13 @@ const CALLS: Record<string, { file: string; rate: number }> = {
 };
 /** Sounds with a few takes (one picked at random): public/sounds/<name>-<n>.mp3, n from 1. */
 const TAKES = {
-  'step-grass': 3, 'step-hard': 2, 'step-sand': 1, 'step-gravel': 4, 'step-water': 3,
-  'dig-hard': 3, 'dig-soft': 1, 'dig-gravel': 2, 'dig-plant': 1,
-  'dug': 2, 'dug-gravel': 3,
+  'step-grass': 5, 'step-hard': 5, 'step-sand': 5, 'step-gravel': 5,
+  'dig-hard': 5, 'dig-soft': 5, 'dug-hard': 5, 'dug-soft': 5, 'place': 5,
 };
 type Takes = keyof typeof TAKES;
 /** Every recording to load. */
 const FILES = [
-  'cow', 'pig', 'chicken',
+  'cow', 'pig', 'chicken', 'splash',
   ...Object.entries(TAKES).flatMap(([name, n]) => Array.from({ length: n }, (_, i) => `${name}-${i + 1}`)),
 ];
 /** What a block sounds like dug and walked on. */
@@ -166,14 +166,10 @@ export class Sounds {
     osc.stop(t + o.seconds + 0.02);
   }
 
-  /**
-   * One hit of digging at a block (repeated while digging): a pickaxe on stone, concrete and
-   * ore, crunching gravel, snapping plants, a scrape in soft ground (dirt, grass, sand).
-   */
+  /** One hit of digging at a block (repeated while digging): a pickaxe on stone, concrete and ore, a soft thump in the rest. */
   dig(type: Block, at: readonly number[]): void {
     const m = material(type), hard = m === 'hard';
-    const name: Takes = hard ? 'dig-hard' : m === 'gravel' ? 'dig-gravel' : m === 'plant' ? 'dig-plant' : 'dig-soft';
-    if (this.take(name, 0.3, at)) return;
+    if (this.take(hard ? 'dig-hard' : 'dig-soft', hard ? 0.25 : m === 'plant' ? 0.15 : 0.3, at)) return;
     // (Not loaded: a synthesised scrape.)
     this.burst({ volume: 0.35, seconds: 0.07, filter: hard ? 'bandpass' : 'lowpass', freq: hard ? 2400 + Math.random() * 600 : 900 + Math.random() * 300, q: hard ? 1.6 : 0.7, at });
     if (type === Block.Diamond) this.tone({ volume: 0.05, seconds: 0.08, from: 2600, to: 2400, type: 'triangle', at });
@@ -202,22 +198,23 @@ export class Sounds {
     return true;
   }
 
-  /** One take (at random) of a sound, at a slightly varied pitch; false if it isn't loaded. */
-  private take(name: Takes, volume: number, at?: readonly number[], seconds?: number): boolean {
+  /** One take (at random) of a sound, at a slightly varied pitch (about `pitch`); false if it isn't loaded. */
+  private take(name: Takes, volume: number, at?: readonly number[], seconds?: number, pitch = 1): boolean {
     const n = 1 + Math.floor(Math.random() * TAKES[name]);
-    return this.sample(`${name}-${n}`, volume, 0.92 + Math.random() * 0.16, at, seconds);
+    return this.sample(`${name}-${n}`, volume, pitch * (0.92 + Math.random() * 0.16), at, seconds);
   }
 
-  /** A block dug out: gravel's own crunch, the general one for everything else (or a synthesised crunch and thump). */
+  /** A block dug out: a last, heavier pickaxe strike on stone, concrete and ore, a thud for the rest (or a synthesised crunch and thump). */
   breakBlock(type: Block, at: readonly number[]): void {
-    const hard = material(type) === 'hard';
-    if (this.take(material(type) === 'gravel' ? 'dug-gravel' : 'dug', 0.6, at)) return;
+    const m = material(type), hard = m === 'hard';
+    if (this.take(hard ? 'dug-hard' : 'dug-soft', hard ? 0.45 : m === 'plant' ? 0.25 : 0.5, at, undefined, hard ? 0.8 : 1)) return;
     this.burst({ volume: 0.5, seconds: 0.18, filter: 'lowpass', freq: hard ? 3000 : 1400, sweepTo: 300, at });
     this.tone({ volume: 0.35, seconds: 0.12, from: hard ? 160 : 120, to: 60, at });
   }
 
-  /** A block placed: a soft thud. */
+  /** A block placed: a light knock (or a synthesised soft thud). */
   placeBlock(at: readonly number[]): void {
+    if (this.take('place', 0.4, at)) return;
     this.tone({ volume: 0.4, seconds: 0.09, from: 190, to: 85, at });
     this.burst({ volume: 0.2, seconds: 0.06, filter: 'lowpass', freq: 700, at });
   }
@@ -231,9 +228,9 @@ export class Sounds {
     this.thud(0.18, (hard ? 1.2 : 1) * (0.9 + Math.random() * 0.2));
   }
 
-  /** A step wading through water: the start of a splash, quietly. */
+  /** A step wading through water: the start of the splash, quietly. */
   wade(): void {
-    this.take('step-water', 0.16, undefined, 0.6);
+    this.sample('splash', 0.16, 1.1 + Math.random() * 0.2, undefined, 0.45);
   }
 
   /** Landing after a fall, louder the harder. */
@@ -249,7 +246,7 @@ export class Sounds {
 
   /** Falling or walking into water. */
   splash(): void {
-    if (this.take('step-water', 0.7)) return;
+    if (this.sample('splash', 0.7, 0.95 + Math.random() * 0.1)) return;
     this.burst({ volume: 0.45, seconds: 0.35, filter: 'bandpass', freq: 1800, sweepTo: 400, q: 0.8 });
   }
 

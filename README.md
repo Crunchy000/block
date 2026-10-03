@@ -50,16 +50,15 @@ or if they fail to, blocks keep the earlier procedural look. Block edges get 4×
 (`?msaa=0` turns it off; safe mode leaves it off).
 
 **Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono)
-for animal calls (cows, pigs and chickens now and then; louder and higher when hit), digging and digging out blocks by what they're made of (a pickaxe on stone, concrete and ore,
-crunching gravel, snapping wheat, a scrape in dirt, grass and sand), quiet footsteps every 2.5 blocks (on grass
-and dirt, sand, gravel, and stone, concrete and ore, and wading through water) and splashing into water, each at a
-slightly varied pitch, most picking one of a few takes, so repeats differ. All but the animals are from
-[AntumDeluge](https://content.luanti.org/users/AntumDeluge/)'s
-[sounds](https://content.luanti.org/packages/AntumDeluge/sounds/) for Luanti, by several authors (CC0, CC BY 3.0
-and CC BY-SA 3.0: credited on the start screen, and per file in `assets/sounds/CREDITS.md`, with the originals in
-`assets/sounds/luanti/`). Sounds fade with distance and pan left or right of where you face. Synthesised on the
-spot from noise and tones: placing a block and a soft thud for landing from a fall (and the recorded ones, until
-they load). `N` or the touch Sounds button switch them off (remembered).
+for animal calls (cows, pigs and chickens now and then; louder and higher when hit), digging and digging out blocks
+(a pickaxe on stone, concrete and ore, a soft thump in dirt, grass, sand, gravel and wheat), placing a block, quiet
+footsteps every 2.5 blocks (on grass and dirt, sand, gravel, and stone, concrete and ore), and splashing into and
+wading through water, each at a slightly varied pitch, most picking one of five takes, so repeats differ. The
+digging, placing and footstep sounds are Kenney's [Impact Sounds](https://kenney.nl/assets/impact-sounds) and
+[RPG Audio](https://kenney.nl/assets/rpg-audio) (CC0; the originals in `assets/sounds/kenney/`, converted by
+`node scripts/convert-sounds.mjs`). Sounds fade with distance and pan left or right of where you face. A soft
+thud for landing from a fall is synthesised on the spot from noise and a tone (as are the others, until they
+load). `N` or the touch Sounds button switch them off (remembered).
 
 **Building:** you start with pastel concrete in 8 colours (pink, peach, butter, mint, sky, periwinkle, lavender,
 cream). Concrete is stone with its colour in the cell's level bits (stone's level is otherwise
