@@ -41,6 +41,9 @@ const SPAWN_MIN = 8, SPAWN_MAX = 20, DESPAWN = 40;
 /** How often (seconds) to try to spawn one when there are fewer than MAX_ANIMALS. */
 const SPAWN_EVERY = 1;
 const FLEE_SECONDS = 3;
+/** Swimming: animals float with water this far up their bodies (a fraction of their height), rising at up to FLOAT_UP. */
+const FLOAT_DEPTH = 0.35;
+const FLOAT_UP = 1.2;
 
 export interface Animal {
   species: Species;
@@ -124,7 +127,11 @@ export class Animals {
         this.animals.splice(i, 1);
         continue;
       }
+      // In water up past its float line: it swims (keeps paddling, toward wherever it was heading).
+      const { height } = a.species.size;
+      const swimming = typeAt(Math.floor(a.feet[0]), Math.floor(a.feet[1] + height * FLOAT_DEPTH), Math.floor(a.feet[2])) === Block.Water;
       this.think(a, dt);
+      if (swimming) { a.walking = true; a.eating = false; }
       // Turn toward the heading, a few radians a second.
       const turn = Math.atan2(Math.sin(a.heading - a.yaw), Math.cos(a.heading - a.yaw));
       a.yaw += Math.max(-4 * dt, Math.min(4 * dt, turn));
@@ -134,6 +141,9 @@ export class Animals {
       const ahead = [a.feet[0] - Math.sin(a.yaw) * reach, a.feet[1], a.feet[2] - Math.cos(a.yaw) * reach];
       const blocked = blocks(typeAt(Math.floor(ahead[0]), Math.floor(ahead[1]), Math.floor(ahead[2])));
       if (a.walking && a.body.onGround && (blocked || a.species.hops)) input.jump = true;
+      if (swimming && blocked) input.jump = true; // climb out onto a bank
+      // Buoyant: rise gently while under the float line (sinking slowly again above it, so it bobs at the surface).
+      if (swimming) a.body.velocity[1] = Math.max(a.body.velocity[1], FLOAT_UP);
       a.body.step(a.feet, dt, a.yaw, input, typeAt);
       if (a.species.hops && input.jump && a.body.velocity[1] > 0) a.body.velocity[1] = Math.min(a.body.velocity[1], blocked ? 8.4 : 5);
       const clip: AnimalClip = a.fleeing > 0 ? 'run' : a.walking ? 'walk' : a.eating ? 'eat' : 'idle';

@@ -137,3 +137,29 @@ describe('mob model file', () => {
     expect(poseFrames(model, 'missing', 0)[0]).toBe(0); // idle instead
   });
 });
+
+describe('animals in water', () => {
+  // A pool: water from y = 6 to 10 (its surface is the top of y = 10) over stone, x < 20; grass beyond.
+  const pool = (x: number, y: number) => (y < 6 ? Block.Stone : x >= 20 ? (y < 10 ? Block.Stone : y === 10 ? Block.Grass : Block.Air) : y <= 10 ? Block.Water : Block.Air);
+
+  it('float at the surface rather than sinking, and swim out onto the bank', () => {
+    const animals = new Animals(seeded(9));
+    const a = animals.trySpawn([0, 11, 0], (_x, y) => (y === 10 ? Block.Grass : y < 10 ? Block.Stone : Block.Air), SPECIES[0])!;
+    a.feet = [8.5, 7, 0.5]; // at the bottom
+    a.yaw = a.heading = -Math.PI / 2; // facing +x, toward the bank
+    a.until = 99;
+    const heights: number[] = [];
+    let out = false;
+    for (let t = 0; t < 40 && !out; t += DT) {
+      a.heading = -Math.PI / 2;
+      animals.update(DT, [10, 11, 0], pool);
+      if (t > 5 && a.feet[0] < 19) heights.push(a.feet[1]); // (once it has risen)
+      out = a.feet[0] > 20.5 && a.body.onGround;
+    }
+    // Afloat: its float line near the surface (11), never down at the bottom.
+    expect(Math.min(...heights)).toBeGreaterThan(11 - a.species.size.height * 0.6);
+    expect(Math.max(...heights)).toBeLessThan(11.3);
+    expect(out).toBe(true);
+    expect(a.feet[1]).toBeCloseTo(11, 1);
+  });
+});

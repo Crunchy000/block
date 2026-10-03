@@ -21,7 +21,8 @@ Ctrl to fly faster) · left click break · right click place ·
 
 **Animals:** up to 10 wander the grass around you: cows, pigs, chickens, rabbits, cats, dogs, deer and foxes
 ("Cube Pets" by [Kenney](https://www.kenney.nl), CC0; credited on the start screen too). They spawn on grass 8–20
-blocks away, stroll, stand about (looking around, or grazing), turn, hop up steps (rabbits hop all the time); hit
+blocks away, stroll, stand about (looking around, or grazing), turn, hop up steps (rabbits hop all the time), and swim: in water they float at the surface (rising
+gently while it's above a third of their height, so they bob), paddle on and climb out onto the banks; hit
 one (dig at it) and it's knocked back and runs off. Each kind has its own size and speeds (`src/world/animals.ts`)
 and uses the player's physics, against a wider box of blocks read back twice a second (40 × 28 × 40); they despawn
 40 blocks away. They're animated: each plays the model's idle, walk, run or eat clip to match. The models
