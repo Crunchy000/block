@@ -156,9 +156,11 @@ describe('animals in water', () => {
       if (t > 5 && a.feet[0] < 19) heights.push(a.feet[1]); // (once it has risen)
       out = a.feet[0] > 20.5 && a.body.onGround;
     }
-    // Afloat: its float line near the surface (11), never down at the bottom.
-    expect(Math.min(...heights)).toBeGreaterThan(11 - a.species.size.height * 0.6);
-    expect(Math.max(...heights)).toBeLessThan(11.3);
+    // Afloat, a little over half under the water's drawn surface (10.83), and never down at the bottom.
+    const mean = heights.reduce((x, y) => x + y, 0) / heights.length, h = a.species.size.height;
+    expect(mean).toBeGreaterThan(10.83 - h * 0.65);
+    expect(mean).toBeLessThan(10.83 - h * 0.45);
+    expect(Math.min(...heights)).toBeGreaterThan(8);
     expect(out).toBe(true);
     expect(a.feet[1]).toBeCloseTo(11, 1);
   });
