@@ -2,8 +2,9 @@
 // and "RPG Audio" (CC0; the originals used are in assets/sounds/kenney/). Each is trimmed of
 // leading silence, levelled to -1 dB peak, made mono and, if given a length, cut short with a
 // fade. Run after changing them: node scripts/convert-sounds.mjs   (needs ffmpeg)
-// (The animal calls and the splash, public/sounds/{cow,pig,chicken,splash}.mp3, are separate
-// recordings, not made here.) Keep the names and counts in step with TAKES in src/ui/sounds.ts.
+// (The animal calls, public/sounds/{cow,pig,chicken}.mp3, are separate recordings, not made
+// here. So is the splash, public/sounds/splash.mp3, from assets/sounds/water-splosh.mp3: mono,
+// leading silence trimmed, cut to 0.7 s with a fade.) Keep the names and counts in step with TAKES in src/ui/sounds.ts.
 import { execFileSync, spawnSync } from 'node:child_process';
 
 const SRC = new URL('../assets/sounds/kenney/', import.meta.url).pathname;
