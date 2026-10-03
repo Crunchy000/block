@@ -353,35 +353,44 @@ fn fs(in: VSOut) -> @location(0) vec4f {
 `;
 
 /**
- * Mobs (the farm animals): a textured model, one instance per mob, placed by its feet
- * position and yaw, with a waddle (a roll along its length, about its middle) and a bob
- * while it walks. The blocks' sun and fog.
+ * Mobs (the animals): a textured model, one instance per mob, placed by its feet position and
+ * yaw, each part posed by the animation frames it's between. The blocks' sun and fog.
  */
 export const mobShader = /* wgsl */ `
 ${uniforms}
 @group(0) @binding(1) var skin: texture_2d<f32>;
 @group(0) @binding(2) var skinSampler: sampler;
+// The model's animation (render/mobModel.ts): per frame (row) and part, 3 texels, the rows of
+// the part's matrix into the model's space.
+@group(0) @binding(3) var poses: texture_2d<f32>;
 
 struct VSOut {
   @builtin(position) pos: vec4f,
   @location(0) world: vec3f,
   @location(1) normal: vec3f,
   @location(2) uv: vec2f,
-  @location(3) colour: vec4f,
 };
+
+/** Row r of a part's matrix, blended between two frames. */
+fn poseRow(part: i32, r: i32, frames: vec4f) -> vec4f {
+  let a = textureLoad(poses, vec2i(part * 3 + r, i32(frames.x)), 0);
+  let b = textureLoad(poses, vec2i(part * 3 + r, i32(frames.y)), 0);
+  return mix(a, b, frames.z);
+}
 
 @vertex
 fn vs(
   @location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f,
-  @location(3) place: vec4f, // feet position, yaw
-  @location(4) pose: vec4f,  // waddle (roll), bob, middle height (the roll's pivot)
-  @location(5) colour: vec4f, // replaces the texture where alpha is 1
+  @location(5) partIndex: f32, // which part of the model (each moves on its own)
+  @location(3) place: vec4f,   // feet position, yaw
+  @location(4) frames: vec4f,  // the two frames it's between, and how far
 ) -> VSOut {
-  let cr = cos(pose.x);
-  let sr = sin(pose.x);
-  let q = p - vec3f(0.0, pose.z, 0.0);
-  let rolled = vec3f(q.x * cr - q.y * sr, q.x * sr + q.y * cr + pose.z + pose.y, q.z);
-  let rn = vec3f(n.x * cr - n.y * sr, n.x * sr + n.y * cr, n.z);
+  let part = i32(partIndex + 0.5);
+  let r0 = poseRow(part, 0, frames);
+  let r1 = poseRow(part, 1, frames);
+  let r2 = poseRow(part, 2, frames);
+  let rolled = vec3f(dot(r0, vec4f(p, 1.0)), dot(r1, vec4f(p, 1.0)), dot(r2, vec4f(p, 1.0)));
+  let rn = vec3f(dot(r0.xyz, n), dot(r1.xyz, n), dot(r2.xyz, n));
   // Yaw: the model faces -z, turned like the camera (forward = (-sin yaw, 0, -cos yaw)).
   let c = cos(place.w);
   let s = sin(place.w);
@@ -391,13 +400,12 @@ fn vs(
   o.world = world;
   o.normal = vec3f(rn.x * c + rn.z * s, rn.y, -rn.x * s + rn.z * c);
   o.uv = uv;
-  o.colour = colour;
   return o;
 }
 
 @fragment
 fn fs(in: VSOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
-  let base = mix(textureSample(skin, skinSampler, in.uv).rgb, in.colour.rgb, in.colour.a);
+  let base = textureSample(skin, skinSampler, in.uv).rgb;
   let normal = normalize(select(-in.normal, in.normal, front));
   let sun = normalize(vec3f(0.4, 0.85, 0.3));
   var lit = base * (0.6 + 0.4 * max(dot(normal, sun), 0.0));

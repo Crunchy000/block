@@ -12,7 +12,7 @@ import { fpsView, frustum, multiply, perspective } from './render/math';
 import { ClassicMeshes } from './render/classicMeshes';
 import { MeshPool } from './render/meshPool';
 import { loadBlockTextures } from './render/blockTextures';
-import { loadMobModel, type MobModel } from './render/mobModel';
+import { loadMobModel, poseFrames, type MobModel } from './render/mobModel';
 import { Renderer } from './render/renderer';
 import { FADE_MS } from './render/shaders';
 import { checkGpuStore } from './sim/check';
@@ -25,7 +25,7 @@ import { createHotbar } from './ui/hotbar';
 import { Music } from './ui/music';
 import { Sounds } from './ui/sounds';
 import { Drops, diamondDropCount } from './world/drops';
-import { Animals, SPECIES } from './world/animals';
+import { Animals, SPECIES, type PoseFrames } from './world/animals';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
 import { generateMissing } from './world/loader';
 import { World, meshSlotCount } from './world/world';
@@ -376,10 +376,11 @@ async function main(): Promise<void> {
       .catch((e: unknown) => logError('Reading the blocks around the animals failed', e))
       .finally(() => { readingMobBox = false; });
   };
-  // Their models ("Cube Farm Animals" by ezgi bakim, CC-BY-4.0), all sharing one texture.
+  // Their models ("Cube Pets" by Kenney, CC0), animated, all sharing one texture.
   const animalModels = new Map<string, MobModel>();
   let animalsReady = false;
-  Promise.all(SPECIES.map((s) => loadMobModel(device, `models/${s.name}.bin`, 'models/farm.png').then((m) => animalModels.set(s.name, m))))
+  const animalFrames: PoseFrames = (name, clip, time) => poseFrames(animalModels.get(name)!, clip, time);
+  Promise.all(SPECIES.map((s) => loadMobModel(device, `models/${s.name}.bin`, 'models/pets.png').then((m) => animalModels.set(s.name, m))))
     .then(() => { animalsReady = true; })
     .catch((e: unknown) => logError('Loading the animal models failed (no animals)', e));
   let animalHitCooldown = 0;
@@ -593,7 +594,7 @@ async function main(): Promise<void> {
       vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE, look: farLook as 'mist' | 'silhouette' | 'colour', extent: far.extent,
       // Safe mode draws chunks without fading them in.
       coverage: world.coverage(performance.now(), safe ? 0 : FADE_MS),
-    } : undefined, [...animals.instances()].map(([name, instances]) => ({ model: animalModels.get(name)!, instances })));
+    } : undefined, [...animals.instances(animalFrames)].map(([name, instances]) => ({ model: animalModels.get(name)!, instances })));
 
     const saved = world.savedCount(), counts = world.counts();
     hud.textContent = [

@@ -19,18 +19,18 @@ Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (throu
 Ctrl to fly faster) · left click break · right click place ·
 `1`–`8` pastel concrete colours · `M` music on/off · `N` sounds on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
-**Farm animals:** up to 10 wander the grass around you: cows, sheep, pigs, chickens, horses, rabbits, cats and
-mice ("Cube Farm Animals" by [ezgi bakim](https://sketchfab.com/ezgibakim),
-[CC BY 4.0](http://creativecommons.org/licenses/by/4.0/), from
-[Sketchfab](https://sketchfab.com/3d-models/cube-farm-animals-b28b7fd5c1454e9d9327fd546463d79f); credited on the
-start screen too). They spawn on grass 8–20 blocks away, stroll, stand about, turn, hop up steps (rabbits hop all
-the time), and waddle as they walk; hit one (dig at it) and it's knocked back and runs off. Each kind has its own
-size and speeds (`src/world/animals.ts`) and uses the player's physics, against a wider box of blocks read back
-twice a second (40 × 28 × 40); they despawn 40 blocks away. The models come from one glTF scene
-(`assets/farm/`), split into an animal each, scaled, turned to face -z and simplified to at most 2,500 triangles
-by `node scripts/convert-models.mjs` into `public/models/<animal>.bin` (80–190 KB each) sharing `farm.png`, and
-are drawn as instances of a textured mesh per kind (`src/render/mobModel.ts`, `mobShader`) with the blocks' light
-and fog, safe mode included.
+**Animals:** up to 10 wander the grass around you: cows, pigs, chickens, rabbits, cats, dogs, deer and foxes
+("Cube Pets" by [Kenney](https://www.kenney.nl), CC0; credited on the start screen too). They spawn on grass 8–20
+blocks away, stroll, stand about (looking around, or grazing), turn, hop up steps (rabbits hop all the time); hit
+one (dig at it) and it's knocked back and runs off. Each kind has its own size and speeds (`src/world/animals.ts`)
+and uses the player's physics, against a wider box of blocks read back twice a second (40 × 28 × 40); they despawn
+40 blocks away. They're animated: each plays the model's idle, walk, run or eat clip to match. The models
+(`assets/cube-pets/`, .glb files whose shared palette texture sits beside them in `Textures/`) animate whole parts
+(legs, body, head, tail, wings) rather than a skeleton, so `node scripts/convert-models.mjs` keeps each part's
+vertices in its own space and samples every clip at 30 fps into a matrix per part per frame (the hierarchy, scale
+and facing baked in): `public/models/<animal>.bin`, 50–70 KB each, sharing `pets.png`. They're drawn as instances
+per kind (`src/render/mobModel.ts`, `mobShader`): the poses are a small float texture that the vertex shader reads,
+blending the two frames each animal is between, with the blocks' light and fog, safe mode included.
 
 **Music:** "The Longest Afternoon" loops quietly while you play (`public/music/`, re-encoded at 128 kbps: 2.9 MB,
 fetched only once play starts). It fades in when play starts (browsers only let a page start sound from a click or
@@ -50,8 +50,7 @@ or if they fail to, blocks keep the earlier procedural look. Block edges get 4×
 (`?msaa=0` turns it off; safe mode leaves it off).
 
 **Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono)
-for animal calls (cows, pigs, sheep and chickens now and then, the horse borrowing the cow's higher; louder and
-higher when hit), digging and digging out blocks by what they're made of (a pickaxe on stone, concrete and ore,
+for animal calls (cows, pigs and chickens now and then; louder and higher when hit), digging and digging out blocks by what they're made of (a pickaxe on stone, concrete and ore,
 crunching gravel, snapping wheat, a scrape in dirt, grass and sand), quiet footsteps every 2.5 blocks (on grass
 and dirt, sand, gravel, and stone, concrete and ore, and wading through water) and splashing into water, each at a
 slightly varied pitch, most picking one of a few takes, so repeats differ. All but the animals are from

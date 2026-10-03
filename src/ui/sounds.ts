@@ -14,13 +14,11 @@ import { Block } from '../constants';
  * starts with the one that starts play (unlock). On or off is remembered between visits.
  */
 const SOUNDS_KEY = 'block.sounds';
-/** Recorded calls, per animal (the horse borrows the cow's, higher). */
+/** Recorded calls, per animal. */
 const CALLS: Record<string, { file: string; rate: number }> = {
   cow: { file: 'cow', rate: 1 },
   pig: { file: 'pig', rate: 1 },
-  sheep: { file: 'sheep', rate: 1 },
   chicken: { file: 'chicken', rate: 1 },
-  horse: { file: 'cow', rate: 1.45 },
 };
 /** Sounds with a few takes (one picked at random): public/sounds/<name>-<n>.mp3, n from 1. */
 const TAKES = {
@@ -31,7 +29,7 @@ const TAKES = {
 type Takes = keyof typeof TAKES;
 /** Every recording to load. */
 const FILES = [
-  'cow', 'pig', 'sheep', 'chicken',
+  'cow', 'pig', 'chicken',
   ...Object.entries(TAKES).flatMap(([name, n]) => Array.from({ length: n }, (_, i) => `${name}-${i + 1}`)),
 ];
 /** What a block sounds like dug and walked on. */

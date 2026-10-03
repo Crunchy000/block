@@ -30,7 +30,10 @@ export interface FarDraw {
   extent: number;
 }
 
-/** Mobs of one kind to draw: a model, and per mob 8 floats (x, y, z, yaw, waddle, bob, middle height, 0; see world/animals.ts). */
+/**
+ * Mobs of one kind to draw: a model, and per mob 8 floats: x, y, z, yaw, then the two frames
+ * of the model's poses it's between and how far (render/mobModel.ts poseFrames), and 0.
+ */
 export interface MobDraw {
   model: MobModel;
   instances: Float32Array<ArrayBuffer>;
@@ -87,7 +90,7 @@ export class Renderer {
   private coverage?: GPUTexture;
   private mobPipeline!: GPURenderPipeline;
   private mobLayout!: GPUBindGroupLayout;
-  private readonly mobGroups = new Map<GPUTexture, GPUBindGroup>();
+  private readonly mobGroups = new Map<MobModel, GPUBindGroup>();
   private mobInstances?: GPUBuffer;
   private mobSampler!: GPUSampler;
 
@@ -212,12 +215,13 @@ export class Renderer {
       multisample: { count: this.samples },
     });
 
-    // Mobs: textured models, one instance per mob (plain vertex buffers and a texture: safe mode too).
+    // Mobs: textured, animated models, one instance per mob (plain vertex buffers and textures: safe mode too).
     this.mobLayout = device.createBindGroupLayout({
       entries: [
         uniformEntry,
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} },
         { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        { binding: 3, visibility: GPUShaderStage.VERTEX, texture: { sampleType: 'unfilterable-float' } },
       ],
     });
     this.mobSampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat' });
@@ -235,7 +239,7 @@ export class Renderer {
               { shaderLocation: 0, offset: 0, format: 'float32x3' },
               { shaderLocation: 1, offset: 12, format: 'float32x3' },
               { shaderLocation: 2, offset: 24, format: 'float32x2' },
-              { shaderLocation: 5, offset: 32, format: 'float32x4' },
+              { shaderLocation: 5, offset: 32, format: 'float32' },
             ],
           },
           {
@@ -387,13 +391,14 @@ export class Renderer {
       for (const m of mobs) {
         device.queue.writeBuffer(this.mobInstances, at * 4, m.instances);
         at += m.instances.length;
-        if (!this.mobGroups.has(m.model.texture)) {
-          this.mobGroups.set(m.model.texture, device.createBindGroup({
+        if (!this.mobGroups.has(m.model)) {
+          this.mobGroups.set(m.model, device.createBindGroup({
             layout: this.mobLayout,
             entries: [
               { binding: 0, resource: { buffer: this.uniformBuffer } },
               { binding: 1, resource: m.model.texture.createView() },
               { binding: 2, resource: this.mobSampler },
+              { binding: 3, resource: m.model.poses.createView() },
             ],
           }));
         }
@@ -464,7 +469,7 @@ export class Renderer {
       let first = 0;
       for (const m of mobs) {
         const count = m.instances.length / 8;
-        pass.setBindGroup(0, this.mobGroups.get(m.model.texture)!);
+        pass.setBindGroup(0, this.mobGroups.get(m.model)!);
         pass.setVertexBuffer(0, m.model.vertex);
         pass.setIndexBuffer(m.model.index, 'uint16');
         pass.drawIndexed(m.model.indexCount, count, 0, 0, first);
