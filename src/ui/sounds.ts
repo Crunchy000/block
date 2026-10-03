@@ -29,7 +29,7 @@ const TAKES = {
 type Takes = keyof typeof TAKES;
 /** Every recording to load. */
 const FILES = [
-  'cow', 'pig', 'chicken', 'splash',
+  'cow', 'pig', 'chicken', 'splash', 'wade',
   ...Object.entries(TAKES).flatMap(([name, n]) => Array.from({ length: n }, (_, i) => `${name}-${i + 1}`)),
 ];
 /** What a block sounds like dug and walked on. */
@@ -228,9 +228,9 @@ export class Sounds {
     this.thud(0.18, (hard ? 1.2 : 1) * (0.9 + Math.random() * 0.2));
   }
 
-  /** A step wading through water: the start of the splash, quietly. */
+  /** A step wading through water: a small splosh, quietly. */
   wade(): void {
-    this.sample('splash', 0.16, 1.1 + Math.random() * 0.2, undefined, 0.45);
+    this.sample('wade', 0.2, 0.95 + Math.random() * 0.15);
   }
 
   /** Landing after a fall, louder the harder. */
