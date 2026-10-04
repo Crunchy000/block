@@ -134,17 +134,17 @@ URL params: `?radius=N` view distance in chunks · `pos=x,y,z` · `yaw=` / `pitc
 texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available) ·
 `cpu` (keep the world on the CPU with the reference code instead, for comparison).
 
-**If something goes wrong:** the **Log** button (top right on the start screen, and at the top whenever
-an error has happened) shows the page log, with **Copy** and **Share** buttons for sending it from a phone.
+**If something goes wrong:** add `?log` to the URL for a **Log** button (top right on the start screen, at the
+top while playing), which shows the page log (it also opens by itself if the game fails to start or the GPU is lost), with **Copy** and **Share** buttons for sending it from a phone.
 It records the startup steps, the browser and GPU (adapter, features and limits), and everything that goes
 wrong: errors with their stack traces, failed promises, console errors and warnings, WebGPU validation and
 shader-compile errors, and a lost GPU device with the browser's reason. It's a plain script (`public/log.js`)
 loaded before the game, so it also catches errors that stop the game loading. It keeps the previous
-visits' logs, saved as they happen: if the game crashes the whole tab, open `log.html` (linked from the start screen) to see and copy them without starting WebGPU. If the GPU device is lost the game stops and says so.
+visits' logs, saved as they happen: if the game crashes the whole tab, open `log.html` (by URL; not linked) to see and copy them without starting WebGPU. If the GPU device is lost the game stops and says so.
 After a GPU crash, browsers can switch WebGPU off for a while: fully close and reopen the browser.
 
-**Benchmark:** the start screen's *Benchmark this device* button opens `bench.html`
-(`https://<owner>.github.io/<repo>/bench.html`), which measures **block updates per second** on your GPU
+**Benchmark:** `bench.html?start` (by URL; not linked from the start screen:
+`https://<owner>.github.io/<repo>/bench.html?start`) which measures **block updates per second** on your GPU
 with the game's code. One block update is one cell's next state for one tick. Press *Start benchmark*:
 it times the game's tick loop (chunks updated in GPU memory, waiting for their flags each tick) for 1 to
 200 different chunks per tick, and reports the best rate, how many chunks that could keep updating at

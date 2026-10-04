@@ -190,6 +190,10 @@
     var style = document.createElement('style');
     style.textContent = STYLE;
     document.head.appendChild(style);
+    // The Log button: in the game only with ?log in the URL (the panel still opens itself when the
+    // game fails); always on the other pages (the benchmark).
+    var game = !/(bench|log)\.html$/.test(location.pathname);
+    if (game && !/[?&]log(=|&|$)/.test(location.search)) return;
     button = document.createElement('button');
     button.type = 'button';
     button.className = 'blog-button';
