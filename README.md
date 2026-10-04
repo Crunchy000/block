@@ -48,7 +48,7 @@ mipmaps (pixel-art up close, smoothly averaged further away, so distant faces do
 take their texture coordinates from their place in the world, so blocks tile without seams. Wheat is a whole
 block tall at every stage, its texture showing it grow. Pastel concrete stays plain. Until the textures load,
 or if they fail to, blocks keep the earlier procedural look. Block edges get 4× multisample antialiasing
-(`?msaa=0` turns it off; safe mode leaves it off).
+(`?msaa=0` turns it off).
 
 **Sound effects** (`src/ui/sounds.ts`, Web Audio): recordings (`public/sounds/`, trimmed, levelled and mono)
 for animal calls (cows, pigs and chickens now and then; louder and higher when hit), digging and digging out blocks
@@ -116,21 +116,20 @@ hills and coastlines through the haze. The other looks are a near-black silhouet
 plain colour (grass, bare slopes and sea with the blocks' lighting, fog pushed out to 2 km). It isn't drawn where real chunks are drawn and faded in (a one-byte-a-chunk coverage map): chunks still loading leave it in place, so the edge of the loaded area never shows sky. A chunk that arrives dissolves in over it in 0.6 s (pixels appearing in a 4 × 4 ordered-dither pattern, so no sorting), the far terrain sitting 0.3 blocks lower so the two don't flicker against each other; edits don't fade again. It has no caves, plants or edits, only the shape of
 the land, and plain vertex buffers, so safe mode shows it too (`src/world/farTerrain.ts`).
 
-**Safe mode** (`?safe`, linked from the start screen): the world on the CPU and the previous renderer (meshes built
-on the CPU, plain indexed draws), for GPUs that crash on the GPU world, as an Adreno 6xx phone on Android 10 did.
-
-**WebGL2** (`src/render/glRenderer.ts`, `glShaders.ts`): where there's no WebGPU, or it fails to start (or with
-`?webgl`), the game draws with WebGL2 instead, picking it by itself. Everything is there, drawn as in safe mode: the
-world on the CPU (`CpuStore`: generation, mining and placing, picking, block updates), world generation with TF.js on
-WebGL (or the CPU), meshes built on the CPU, the textured blocks, far terrain, animated animals, the selection outline
-and 4x MSAA (a multisampled framebuffer with float depth, resolved onto the canvas; reversed depth where the browser
-has `EXT_clip_control`). Chunks appear without fading in, and the view distance defaults to 4 (up to 8), since
-generating and meshing on the CPU is slower. Both renderers implement one interface (`src/render/types.ts`): chunk
-meshes, block textures and animal models are fetched as plain data and each renderer uploads its own.
+**Safe mode** (`?safe` or `?webgl`, linked from the start screen; and automatically wherever WebGPU is missing or
+fails to start): for browsers without WebGPU and GPUs that crash on the GPU world (as an Adreno 6xx phone on Android 10
+did). It draws with WebGL2 (`src/render/glRenderer.ts`, `glShaders.ts`) and keeps the world on the CPU (`CpuStore`:
+generation, mining and placing, picking, block updates), with world generation on TF.js's WebGL backend (or the CPU)
+and meshes built on the CPU. Everything is there: the textured blocks, far terrain, animated animals, the selection
+outline and 4x MSAA (a multisampled framebuffer with float depth, resolved onto the canvas; reversed depth where the
+browser has `EXT_clip_control`). Chunks appear without fading in, the view distance defaults to 4 (up to 8), and block
+updates (water flowing, grass spreading, wheat growing) only run within 4 chunks, since all of it runs on the CPU.
+Both renderers implement one interface (`src/render/types.ts`): chunk meshes, block textures and animal models are
+fetched as plain data and each renderer uploads its own.
 
 URL params: `?radius=N` view distance in chunks · `pos=x,y,z` · `yaw=` / `pitch=` (radians) ·
 `chunks` (outlines on) · `spread=` grass spread chance per tick (default 1/16, 0 = never) ·
-`grow=` wheat growth chance per tick (default 1/40, 1/12 next to water) · `webgl` (draw with WebGL2 even where WebGPU works) · `offscreen` (render to a
+`grow=` wheat growth chance per tick (default 1/40, 1/12 next to water) · `offscreen` (render to a
 texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available) ·
 `cpu` (keep the world on the CPU with the reference code instead, for comparison).
 
@@ -172,7 +171,7 @@ grass and wheat taking over the terrain around spawn and logs tick times.
 | `src/render/mesher.ts` | Face records (one `u32` per quad) and the reference mesher |
 | `src/render/gpuMesher.ts` | The mesher as a compute shader, writing face records and indirect draw counts |
 | `src/render/blockTextures.ts` | The block texture layers (Baunilha) and their mipmaps |
-| `src/render/glRenderer.ts`, `glShaders.ts` | The WebGL2 renderer and its GLSL shaders, for browsers without WebGPU |
+| `src/render/glRenderer.ts`, `glShaders.ts` | Safe mode's WebGL2 renderer and its GLSL shaders (also for browsers without WebGPU) |
 | `src/render/` (rest) | Mesh pool, WGSL shaders (vertex pulling from face records), renderer (opaque, lines, translucent water) |
 | `src/tf/blockUpdateReference.ts` | The rules cell by cell in plain JS: the readable spec, and the oracle every other version is tested against |
 | `src/tf/blockUpdate.ts`, `blockUpdateKernel.ts` | The rules as TF.js tensor ops, and as a TF.js custom kernel (the previous design's tick, kept for the benchmark) |

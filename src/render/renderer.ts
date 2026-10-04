@@ -2,10 +2,9 @@ import type { MeshTarget } from '../sim/store';
 import type { ChunkDraw } from '../world/world';
 import { blockTexturesOnGpu, type BlockTextureData } from './blockTextures';
 import { requestGpu } from './gpu';
-import { ClassicMeshes, VERTEX_FLOATS } from './classicMeshes';
 import { MeshPool } from './meshPool';
 import { MOB_VERTEX_FLOATS, mobModelOnGpu, type MobModel, type MobModelData } from './mobModel';
-import { blockShader, classicBlockShader, farShader, lineShader, mobShader } from './shaders';
+import { blockShader, farShader, lineShader, mobShader } from './shaders';
 import { MIST_FOG, SKY, type FarDraw, type GameRenderer, type MobDraw } from './types';
 
 /** Reversed depth (math.ts perspective): float depth keeps precision at any view distance. */
@@ -21,12 +20,6 @@ export interface RendererOptions {
    * environments where canvas presentation is unavailable (screenshots, CI).
    */
   offscreen?: boolean;
-  /**
-   * Safe mode (?safe): draw chunk meshes built on the CPU with plain vertex and index buffers,
-   * as the renderer did before meshing moved to the GPU. No storage buffers in the vertex
-   * stage, no draw sizes read from GPU memory.
-   */
-  safe?: boolean;
   /**
    * Multisample antialiasing: 4 samples a pixel smooth the edges of blocks (most of all far
    * away, where they'd otherwise shimmer as the camera turns). On unless false.
@@ -51,7 +44,7 @@ export class Renderer implements GameRenderer {
   private uniformBuffer!: GPUBuffer;
   private layout!: GPUBindGroupLayout;
   private bindGroup?: GPUBindGroup;
-  private bindGroupKey?: ClassicMeshes | GPUBuffer;
+  private bindGroupKey?: GPUBuffer;
   private blockTextures!: GPUTexture;
   private blockSampler!: GPUSampler;
   private textured = false;
@@ -110,20 +103,16 @@ export class Renderer implements GameRenderer {
 
     this.samples = this.options.msaa === false ? 1 : 4;
     this.uniformBuffer = device.createBuffer({ size: 112, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    const safe = this.options.safe === true;
-    // Uniforms, then (except in safe mode) the meshes' face records and chunk origins, read by the vertex shader.
+    // Uniforms, the meshes' face records and chunk origins (read by the vertex shader), then the
+    // block textures and their sampler (for the fragment shader).
     const uniformEntry: GPUBindGroupLayoutEntry = { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} };
-    // Then the block textures and their sampler, for the fragment shader.
-    const textureBinding = safe ? 1 : 3;
     this.layout = device.createBindGroupLayout({
       entries: [
-        ...(safe ? [uniformEntry] : [
-          uniformEntry,
-          { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-          { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
-        ] satisfies GPUBindGroupLayoutEntry[]),
-        { binding: textureBinding, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
-        { binding: textureBinding + 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+        uniformEntry,
+        { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { viewDimension: '2d-array' } },
+        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
       ],
     });
     // Until the textures load (or if they don't), a blank layer, and blocks keep their procedural look.
@@ -134,23 +123,11 @@ export class Renderer implements GameRenderer {
     });
     const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [this.layout] });
 
-    const blockModule = device.createShaderModule({ label: safe ? 'blocks (safe mode)' : 'blocks', code: safe ? classicBlockShader : blockShader });
-    const classicVertex = (): GPUVertexState => ({
-      module: blockModule,
-      entryPoint: 'vs',
-      buffers: [{
-        arrayStride: VERTEX_FLOATS * 4,
-        attributes: [
-          { shaderLocation: 0, offset: 0, format: 'float32x3' },
-          { shaderLocation: 1, offset: 12, format: 'float32x3' },
-          { shaderLocation: 2, offset: 24, format: 'float32' },
-        ],
-      }],
-    });
+    const blockModule = device.createShaderModule({ label: 'blocks', code: blockShader });
     this.opaquePipeline = device.createRenderPipeline({
       label: 'blocks (opaque)',
       layout: pipelineLayout,
-      vertex: safe ? classicVertex() : { module: blockModule, entryPoint: 'vsFace' },
+      vertex: { module: blockModule, entryPoint: 'vsFace' },
       fragment: { module: blockModule, entryPoint: 'fs', targets: [{ format: this.format }] },
       primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'ccw' },
       depthStencil: { format: DEPTH, depthWriteEnabled: true, depthCompare: 'greater' },
@@ -159,7 +136,7 @@ export class Renderer implements GameRenderer {
     this.waterPipeline = device.createRenderPipeline({
       label: 'blocks (water)',
       layout: pipelineLayout,
-      vertex: safe ? classicVertex() : { module: blockModule, entryPoint: 'vsFace' },
+      vertex: { module: blockModule, entryPoint: 'vsFace' },
       fragment: {
         module: blockModule,
         entryPoint: 'fs',
@@ -175,7 +152,7 @@ export class Renderer implements GameRenderer {
       depthStencil: { format: DEPTH, depthWriteEnabled: false, depthCompare: 'greater' },
       multisample: { count: this.samples },
     });
-    // Far terrain: its own small uniform block beside the shared one; plain vertex buffers, so safe mode draws it too.
+    // Far terrain: its own small uniform block beside the shared one; plain vertex buffers.
     this.farUniforms = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     const farLayout = this.farLayout = device.createBindGroupLayout({
       entries: [
@@ -195,7 +172,7 @@ export class Renderer implements GameRenderer {
       multisample: { count: this.samples },
     });
 
-    // Mobs: textured, animated models, one instance per mob (plain vertex buffers and textures: safe mode too).
+    // Mobs: textured, animated models, one instance per mob (plain vertex buffers and textures).
     this.mobLayout = device.createBindGroupLayout({
       entries: [
         uniformEntry,
@@ -260,12 +237,11 @@ export class Renderer implements GameRenderer {
     });
   }
 
-  private groupFor(meshes: MeshPool | ClassicMeshes): GPUBindGroup {
+  private groupFor(meshes: MeshPool): GPUBindGroup {
     // (A MeshPool's face buffer is replaced when it grows.)
-    const key = meshes instanceof ClassicMeshes ? meshes : meshes.faces;
-    if (this.bindGroup && this.bindGroupKey === key) return this.bindGroup;
-    this.bindGroupKey = key;
-    const buffers = meshes instanceof ClassicMeshes ? [this.uniformBuffer] : [this.uniformBuffer, meshes.faces, meshes.origins];
+    if (this.bindGroup && this.bindGroupKey === meshes.faces) return this.bindGroup;
+    this.bindGroupKey = meshes.faces;
+    const buffers = [this.uniformBuffer, meshes.faces, meshes.origins];
     return this.bindGroup = this.device.createBindGroup({
       layout: this.layout,
       entries: [
@@ -285,9 +261,9 @@ export class Renderer implements GameRenderer {
     return [i.vendor, i.architecture || i.device || i.description].filter(Boolean).join(' ') || 'unknown';
   }
 
-  /** Chunk meshes: GPU-built face records (MeshPool), or in safe mode CPU-built vertex buffers (ClassicMeshes). */
-  createMeshes(slots: number): MeshPool | ClassicMeshes {
-    return this.options.safe ? new ClassicMeshes(this.device, slots) : new MeshPool(this.device, slots);
+  /** Chunk meshes: face records in GPU memory, built there (or uploaded, with the world on the CPU). */
+  createMeshes(slots: number): MeshPool {
+    return new MeshPool(this.device, slots);
   }
 
   createMobModel(data: MobModelData): MobModel {
@@ -360,7 +336,7 @@ export class Renderer implements GameRenderer {
     viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>,
     meshes: MeshTarget, draws: ChunkDraw[], far?: FarDraw, mobDraws: MobDraw[] = [],
   ): void {
-    const pool = meshes as MeshPool | ClassicMeshes;
+    const pool = meshes as MeshPool;
     const mobs = mobDraws as Array<{ model: MobModel; instances: Float32Array<ArrayBuffer> }>;
     // A canvas throttles us to what the GPU can present; offscreen nothing does, and on a
     // slow GPU frames would pile up in the queue ahead of the block-update work. Skip
@@ -449,19 +425,11 @@ export class Renderer implements GameRenderer {
     });
     pass.setBindGroup(0, this.groupFor(pool));
 
-    // Safe mode: indexed draws of CPU-built meshes; otherwise each chunk's run of face records.
+    // Each chunk's run of face records.
     const drawMesh = (d: ChunkDraw, water: boolean) => {
-      if (pool instanceof ClassicMeshes) {
-        const m = water ? pool.get(d.meshSlot)?.water : pool.get(d.meshSlot)?.opaque;
-        if (!m) return;
-        pass.setVertexBuffer(0, m.vertex);
-        pass.setIndexBuffer(m.index, 'uint32');
-        pass.drawIndexed(m.count);
-      } else {
-        const m = pool.get(d.meshSlot);
-        const run = water ? m?.water : m?.opaque;
-        if (run?.count) pass.draw(run.count * 6, 1, run.start * 6, d.meshSlot);
-      }
+      const m = pool.get(d.meshSlot);
+      const run = water ? m?.water : m?.opaque;
+      if (run?.count) pass.draw(run.count * 6, 1, run.start * 6, d.meshSlot);
     };
     pass.setPipeline(this.opaquePipeline);
     for (const d of draws) drawMesh(d, false);

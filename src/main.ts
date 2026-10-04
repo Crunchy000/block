@@ -40,8 +40,9 @@ const $ = (id: string) => document.getElementById(id)!;
 const VIEW_DISTANCES = [3, 4, 8, 16, 32, 64];
 const VIEW_KEY = 'block.viewDistance';
 const FAR_KEY = 'block.farTerrain';
-/** Block updates run this far out at most; beyond it chunks are drawn but frozen. */
+/** Block updates run this far out at most (chunks; in safe mode, on the CPU, less); beyond it chunks are drawn but frozen. */
 const MAX_SIMULATION_DISTANCE = 8;
+const SAFE_SIMULATION_DISTANCE = 4;
 
 /**
  * The furthest view distance this GPU can hold: the cells of every loaded chunk (the view
@@ -142,24 +143,24 @@ async function main(): Promise<void> {
   log.info(`Block build ${__BUILD__}`);
   setStatus('Starting the graphics…');
   const params = new URLSearchParams(location.search);
-  // Safe mode (?safe): the world on the CPU and the previous renderer, for GPUs (some phones)
-  // that crash on the GPU world or its renderer.
-  const safe = params.has('safe');
-  if (safe) log.info('Safe mode: world on the CPU, meshes built on the CPU, plain draws');
-  // 4x MSAA smooths block edges (?msaa=0 turns it off; safe mode keeps it off, to stay simple).
-  const msaa = !safe && params.get('msaa') !== '0';
-  // WebGPU, or where there's none (or it fails to start, or ?webgl asks), WebGL2: the world
-  // then lives on the CPU with meshes built there, as in safe mode.
+  // 4x MSAA smooths block edges (?msaa=0 turns it off).
+  const msaa = params.get('msaa') !== '0';
+  // WebGPU, with the world in GPU memory. Or safe mode: WebGL2, with the world on the CPU and
+  // meshes built there, block updates only near the player. Safe mode is for GPUs (some phones)
+  // that crash on the GPU world, and browsers without WebGPU: asked for (?safe, or ?webgl), or
+  // whenever WebGPU is missing or fails to start.
+  let safe = params.has('safe') || params.has('webgl');
   let renderer: GameRenderer, device: GPUDevice | undefined, adapterInfo: GPUAdapterInfo | undefined;
   try {
-    if (params.has('webgl')) throw new Error('?webgl');
-    const webgpu = await Renderer.create(canvas, { offscreen: params.has('offscreen'), safe, msaa });
+    if (safe) throw new Error('safe mode asked for');
+    const webgpu = await Renderer.create(canvas, { offscreen: params.has('offscreen'), msaa });
     renderer = webgpu;
     ({ device, adapterInfo } = webgpu);
   } catch (e) {
     const [why] = log.describe(e);
-    if (params.has('webgl')) log.info('?webgl: drawing with WebGL2');
-    else log.warn(`No WebGPU (${why}): drawing with WebGL2 instead`);
+    if (safe) log.info('Safe mode: WebGL2, the world on the CPU');
+    else log.warn(`No WebGPU (${why}): safe mode instead (WebGL2, the world on the CPU)`);
+    safe = true;
     renderer = GlRenderer.create(canvas, { msaa, offscreen: params.has('offscreen') });
   }
   // Block textures ("Baunilha" by Mirtilo, CC BY-SA 4.0): until they load, or if they don't, blocks keep their plain look.
@@ -178,7 +179,7 @@ async function main(): Promise<void> {
     logError('Kernel warm-up failed (kernels will compile on first use)', e);
   }
   const viewRadius = viewDistance(params, device, safe);
-  const activeRadius = Math.min(viewRadius, MAX_SIMULATION_DISTANCE);
+  const activeRadius = Math.min(viewRadius, safe ? SAFE_SIMULATION_DISTANCE : MAX_SIMULATION_DISTANCE);
   const ghostRadius = viewRadius + 1;
   log.info(`View distance ${viewRadius} (${(2 * viewRadius + 1) ** 2} chunks drawn), simulation distance ${activeRadius}`);
   showViewDistances(viewRadius, maxViewDistance(device, safe), safe);
@@ -189,7 +190,7 @@ async function main(): Promise<void> {
   // the world lives on the CPU with the reference code instead (slower, same game).
   const onCpu = safe || !device || params.has('cpu');
   if (!onCpu) setStatus('Checking the GPU world code…');
-  const check = onCpu || !device ? { ok: false, summary: '', detail: safe ? 'safe mode' : !device ? renderer.api : '?cpu' }
+  const check = onCpu || !device ? { ok: false, summary: '', detail: safe ? 'safe mode' : '?cpu' }
     : await checkGpuStore(device).catch((e: unknown) => ({ ok: false, summary: '', detail: log.describe(e).join('\n') }));
   if (check.ok) log.info('GPU world check passed', check.summary);
   else if (!onCpu) log.warn('GPU world check failed: the world stays on the CPU', check.detail);
@@ -231,7 +232,7 @@ async function main(): Promise<void> {
     ...(params.has('spread') && { grassSpread: chance('spread') }),
     ...(params.has('grow') && { wheatGrow: chance('grow'), wheatGrowWet: chance('grow') }),
   });
-  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)&msaa=0&webgl (WebGL2 even with WebGPU)
+  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)&msaa=0&safe (or webgl: WebGL2, the world on the CPU)
   const pos = (params.get('pos') ?? '8,52,8').split(',').map(Number) as [number, number, number];
   const controls = new Controls(canvas, pos);
   controls.flying = params.has('fly');
@@ -606,8 +607,8 @@ async function main(): Promise<void> {
     world.focus = (x, z) => inView([(x - 1) * CHUNK_SIZE, 0, (z - 1) * CHUNK_SIZE], [(x + 2) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 2) * CHUNK_SIZE]);
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws, far?.ready ? {
       vertices: far.vertices, indices: far.indices, version: far.version, seaY: SEA_SURFACE, look: farLook as 'mist' | 'silhouette' | 'colour', extent: far.extent,
-      // Safe mode and WebGL2 draw chunks without fading them in.
-      coverage: world.coverage(performance.now(), safe || !device ? 0 : FADE_MS),
+      // Safe mode draws chunks without fading them in.
+      coverage: world.coverage(performance.now(), safe ? 0 : FADE_MS),
     } : undefined, [...animals.instances(animalFrames)].map(([name, instances]) => ({ model: animalModels.get(name)!, instances })));
 
     const saved = world.savedCount(), counts = world.counts();

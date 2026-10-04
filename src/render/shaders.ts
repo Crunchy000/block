@@ -9,7 +9,7 @@ const INSET = PLANT_QUADS[0][0];
 export const FADE_MS = 600;
 
 /**
- * The block fragment shader (shared by the GPU-meshed and safe-mode pipelines), the block
+ * The block fragment shader, the block
  * texture array and its sampler bound at `binding` and the next.
  */
 const blockFragment = (binding: number) => /* wgsl */ `
@@ -436,35 +436,4 @@ fn vs(@location(0) pos: vec3f, @location(1) color: vec3f) -> VSOut {
 fn fs(in: VSOut) -> @location(0) vec4f {
   return vec4f(in.color, 1.0);
 }
-`;
-
-/** The previous renderer's block shader, kept unchanged for safe mode (?safe): plain vertex attributes, built on the CPU. */
-export const classicBlockShader = /* wgsl */ `
-${uniforms}
-
-struct VSOut {
-  @builtin(position) pos: vec4f,
-  @location(0) world: vec3f,
-  @location(1) normal: vec3f,
-  @location(2) @interpolate(flat) kind: u32,
-  @location(3) @interpolate(flat) fade: f32, // 0..1 as a newly arrived chunk fades in
-};
-
-@vertex
-fn vs(@location(0) pos: vec3f, @location(1) normal: vec3f, @location(2) kind: f32) -> VSOut {
-  var o: VSOut;
-  var p = pos;
-  // Gentle bob on fluid surfaces (water 3, lava 4).
-  if (kind > 2.5 && kind < 4.5 && normal.y > 0.5) {
-    p.y += 0.04 * sin(u.camPos.w * 2.0 + pos.x * 0.7 + pos.z * 0.9) - 0.04;
-  }
-  o.pos = u.viewProj * vec4f(p, 1.0);
-  o.world = pos;
-  o.normal = normal;
-  o.kind = u32(kind + 0.5);
-  o.fade = 1.0; // (safe mode: chunks appear without fading)
-  return o;
-}
-
-${blockFragment(1)}
 `;
