@@ -242,7 +242,8 @@ async function main(): Promise<void> {
     ...(params.has('grow') && { wheatGrow: chance('grow'), wheatGrowWet: chance('grow') }),
   });
   // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)&msaa=0&safe (or webgl: WebGL2, the world on the CPU)
-  const pos = (params.get('pos') ?? '8,52,8').split(',').map(Number) as [number, number, number];
+  // (Safe mode's world differs in its details, and the usual start is in the sea there: it starts on land.)
+  const pos = (params.get('pos') ?? (safe ? '9,35,129' : '8,52,8')).split(',').map(Number) as [number, number, number];
   const controls = new Controls(canvas, pos);
   controls.flying = params.has('fly');
   if (params.has('yaw')) controls.yaw = Number(params.get('yaw'));
