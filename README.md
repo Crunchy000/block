@@ -123,7 +123,8 @@ generation, mining and placing, picking, block updates), with world generation o
 and meshes built on the CPU. Everything is there: the textured blocks, far terrain, animated animals, the selection
 outline and 4x MSAA (a multisampled framebuffer with float depth, resolved onto the canvas; reversed depth where the
 browser has `EXT_clip_control`). Chunks appear without fading in, the view distance defaults to 4 (up to 8), and block
-updates (water flowing, grass spreading, wheat growing) only run within 4 chunks, since all of it runs on the CPU.
+updates (water flowing, grass spreading, wheat growing) are off to start with, since on the CPU they stall the game
+(`P` turns them on, within 4 chunks of the player).
 Both renderers implement one interface (`src/render/types.ts`): chunk meshes, block textures and animal models are
 fetched as plain data and each renderer uploads its own.
 

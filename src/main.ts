@@ -303,7 +303,10 @@ async function main(): Promise<void> {
   /** The block placed (an index into BUILDING_BLOCKS). */
   let selected = 0;
   let showChunks = params.has('chunks');
-  let paused = false;
+  // Block updates (water flowing, grass spreading, wheat growing): off to start with in safe mode,
+  // where they run on the CPU and stall the game (P, or the touch Pause button, turns them on).
+  let paused = safe;
+  touchUI.setToggle('KeyP', paused);
   const hotbar = createHotbar((index) => { selected = index; hotbar.setSelected(index); });
   hotbar.setSelected(selected);
   touchUI.setToggle('KeyG', showChunks);
@@ -533,7 +536,7 @@ async function main(): Promise<void> {
 
   const blockUpdateStatus = () => {
     const batch = `${sim.lastBatch} chunk${sim.lastBatch === 1 ? '' : 's'}`;
-    if (paused) return 'paused';
+    if (paused) return safe ? 'off in safe mode ([P] turns them on)' : 'paused';
     if (!world.haloReady()) return 'waiting for terrain';
     if (sim.busy && sim.ticks === 0) return 'running the first tick…';
     if (sim.ticks === 0) return 'starting…';
