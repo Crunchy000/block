@@ -128,8 +128,8 @@ lie, about 1 cell in 6) from the WebGPU one. It draws the textured blocks, anima
 outline and 4x MSAA (a multisampled framebuffer with float depth, resolved onto the canvas; reversed depth where the
 browser has `EXT_clip_control`). Chunks appear without fading in, there's no far terrain (unless `?far=` asks for it), the view distance defaults
 to 4 (up to 8), and block
-updates (water flowing, grass spreading, wheat growing) are off to start with, since on the CPU they stall the game
-(`P` turns them on, in the player's chunk and the 8 around it).
+updates (water flowing, grass spreading, wheat growing) run only in the chunk the player is in, on the CPU (the
+plain-JS rules, `src/tf/blockUpdateReference.ts`); water flowing out of it stops at its edge until you walk over.
 Both renderers implement one interface (`src/render/types.ts`): chunk meshes, block textures and animal models are
 fetched as plain data and each renderer uploads its own.
 

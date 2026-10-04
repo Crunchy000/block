@@ -43,7 +43,7 @@ const VIEW_KEY = 'block.viewDistance';
 const FAR_KEY = 'block.farTerrain';
 /** Block updates run this far out at most (chunks; in safe mode, on the CPU, less); beyond it chunks are drawn but frozen. */
 const MAX_SIMULATION_DISTANCE = 8;
-const SAFE_SIMULATION_DISTANCE = 1;
+const SAFE_SIMULATION_DISTANCE = 0; // just the player's chunk
 
 /**
  * The furthest view distance this GPU can hold: the cells of every loaded chunk (the view
@@ -312,10 +312,8 @@ async function main(): Promise<void> {
   /** The block placed (an index into BUILDING_BLOCKS). */
   let selected = 0;
   let showChunks = params.has('chunks');
-  // Block updates (water flowing, grass spreading, wheat growing): off to start with in safe mode,
-  // where they run on the CPU and stall the game (P, or the touch Pause button, turns them on).
-  let paused = safe;
-  touchUI.setToggle('KeyP', paused);
+  // Block updates (water flowing, grass spreading, wheat growing); P, or the touch Pause button, pauses them.
+  let paused = false;
   const hotbar = createHotbar((index) => { selected = index; hotbar.setSelected(index); });
   hotbar.setSelected(selected);
   touchUI.setToggle('KeyG', showChunks);
@@ -545,7 +543,7 @@ async function main(): Promise<void> {
 
   const blockUpdateStatus = () => {
     const batch = `${sim.lastBatch} chunk${sim.lastBatch === 1 ? '' : 's'}`;
-    if (paused) return safe ? 'off in safe mode ([P] turns them on)' : 'paused';
+    if (paused) return 'paused';
     if (!world.haloReady()) return 'waiting for terrain';
     if (sim.busy && sim.ticks === 0) return 'running the first tick…';
     if (sim.ticks === 0) return 'starting…';
