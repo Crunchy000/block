@@ -53,43 +53,53 @@ export function poseFrames(model: Pick<MobModel, 'clips' | 'fps'>, clip: string,
 
 const url = (path: string) => new URL(path, document.baseURI).toString();
 
-/** Textures by path: models sharing one (the animals' palette) load it once. */
-const textures = new Map<string, Promise<GPUTexture>>();
+/** A model as fetched, before a renderer uploads it: its parsed file and its texture's image. */
+export type MobModelData = ReturnType<typeof parseModel> & { image: ImageBitmap };
 
-function loadTexture(device: GPUDevice, path: string): Promise<GPUTexture> {
-  let t = textures.get(path);
-  if (!t) {
-    t = fetch(url(path))
+/** Texture images by path: models sharing one (the animals' palette) fetch it once. */
+const images = new Map<string, Promise<ImageBitmap>>();
+
+function fetchImage(path: string): Promise<ImageBitmap> {
+  let image = images.get(path);
+  if (!image) {
+    image = fetch(url(path))
       .then((r) => { if (!r.ok) throw new Error(`${path}: ${r.status}`); return r.blob(); })
-      .then((b) => createImageBitmap(b))
-      .then((image) => {
-        // Plain rgba8unorm (not sRGB): block colours are lit in the same space, so mobs match them.
-        const texture = device.createTexture({
-          label: path, size: [image.width, image.height], format: 'rgba8unorm',
-          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
-        });
-        device.queue.copyExternalImageToTexture({ source: image }, { texture }, [image.width, image.height]);
-        image.close();
-        return texture;
-      });
-    textures.set(path, t);
+      .then((b) => createImageBitmap(b));
+    images.set(path, image);
   }
-  return t;
+  return image;
 }
 
-/** Fetch a model and its texture (paths relative to the page) onto the GPU. */
-export async function loadMobModel(device: GPUDevice, modelPath: string, texturePath: string): Promise<MobModel> {
-  const [data, texture] = await Promise.all([
+/** Fetch a model and its texture (paths relative to the page), for a renderer to upload. */
+export async function fetchMobModel(modelPath: string, texturePath: string): Promise<MobModelData> {
+  const [data, image] = await Promise.all([
     fetch(url(modelPath)).then((r) => { if (!r.ok) throw new Error(`${modelPath}: ${r.status}`); return r.arrayBuffer(); }),
-    loadTexture(device, texturePath),
+    fetchImage(texturePath),
   ]);
-  const m = parseModel(data);
+  return { ...parseModel(data), image };
+}
+
+/** Textures on the GPU by image: models sharing one upload it once. */
+const textures = new WeakMap<ImageBitmap, GPUTexture>();
+
+/** A fetched model on a WebGPU device. */
+export function mobModelOnGpu(device: GPUDevice, m: MobModelData): MobModel {
+  let texture = textures.get(m.image);
+  if (!texture) {
+    // Plain rgba8unorm (not sRGB): block colours are lit in the same space, so mobs match them.
+    texture = device.createTexture({
+      label: 'mob texture', size: [m.image.width, m.image.height], format: 'rgba8unorm',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    device.queue.copyExternalImageToTexture({ source: m.image }, { texture }, [m.image.width, m.image.height]);
+    textures.set(m.image, texture);
+  }
   const vertex = device.createBuffer({ label: 'mob vertices', size: m.vertexData.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(vertex, 0, m.vertexData);
   const index = device.createBuffer({ label: 'mob indices', size: m.indexData.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(index, 0, m.indexData);
   const poses = device.createTexture({
-    label: `${modelPath} poses`, size: [m.parts * 3, m.frames], format: 'rgba32float',
+    label: 'mob poses', size: [m.parts * 3, m.frames], format: 'rgba32float',
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
   });
   device.queue.writeTexture({ texture: poses }, m.poseData, { bytesPerRow: m.parts * 3 * 16 }, [m.parts * 3, m.frames]);

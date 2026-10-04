@@ -50,13 +50,20 @@ export function mipLevels(data: Uint8Array<ArrayBuffer>, size: number, count: nu
   return levels;
 }
 
-/** Fetch the block textures onto the GPU, as a texture array with mipmaps. */
-export async function loadBlockTextures(device: GPUDevice): Promise<GPUTexture> {
+/** The block textures as loaded: `count` layers, and their mip levels (TEXTURE_SIZE down to 1, RGBA, every layer). */
+export interface BlockTextureData { count: number; levels: Uint8Array<ArrayBuffer>[] }
+
+/** Fetch the block textures and make their mipmaps (for a renderer to upload as a texture array). */
+export async function fetchBlockTextures(): Promise<BlockTextureData> {
   const r = await fetch(new URL('textures/blocks.bin', document.baseURI));
   if (!r.ok) throw new Error(`textures/blocks.bin: ${r.status}`);
   const file = await r.arrayBuffer();
   const count = new Uint32Array(file, 0, 1)[0];
-  const levels = mipLevels(new Uint8Array(file, 4, count * TEXTURE_SIZE * TEXTURE_SIZE * 4), TEXTURE_SIZE, count);
+  return { count, levels: mipLevels(new Uint8Array(file, 4, count * TEXTURE_SIZE * TEXTURE_SIZE * 4), TEXTURE_SIZE, count) };
+}
+
+/** The block textures on a WebGPU device, as a texture array with mipmaps. */
+export function blockTexturesOnGpu(device: GPUDevice, { count, levels }: BlockTextureData): GPUTexture {
   const texture = device.createTexture({
     label: 'block textures', size: [TEXTURE_SIZE, TEXTURE_SIZE, count], mipLevelCount: levels.length,
     // Plain rgba8unorm (not sRGB), as the mobs' texture: lit in the same space as before.

@@ -9,11 +9,12 @@ import { EYE_HEIGHT, Nearby, overlaps } from './player/physics';
 import { TouchControls } from './player/touchControls';
 import type { RayHit } from './player/raycast';
 import { fpsView, frustum, multiply, perspective } from './render/math';
-import { ClassicMeshes } from './render/classicMeshes';
 import { MeshPool } from './render/meshPool';
-import { loadBlockTextures } from './render/blockTextures';
-import { loadMobModel, poseFrames, type MobModel } from './render/mobModel';
+import { fetchBlockTextures } from './render/blockTextures';
+import { GlRenderer } from './render/glRenderer';
+import { fetchMobModel, poseFrames } from './render/mobModel';
 import { Renderer } from './render/renderer';
+import type { GameRenderer, MobModelHandle } from './render/types';
 import { FADE_MS } from './render/shaders';
 import { checkGpuStore } from './sim/check';
 import { CpuStore } from './sim/cpuStore';
@@ -44,21 +45,22 @@ const MAX_SIMULATION_DISTANCE = 8;
 
 /**
  * The furthest view distance this GPU can hold: the cells of every loaded chunk (the view
- * plus a ring) are one GPU buffer of 64 KB a chunk. Safe mode builds meshes on the CPU,
- * which is slow for big areas.
+ * plus a ring) are one GPU buffer of 64 KB a chunk. Safe mode and WebGL2 build meshes on the
+ * CPU (no `device`), which is slow for big areas.
  */
-function maxViewDistance(device: GPUDevice, safe: boolean): number {
-  if (safe) return 8;
+function maxViewDistance(device: GPUDevice | undefined, safe: boolean): number {
+  if (safe || !device) return 8;
   const bytes = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
   const ring = Math.floor(Math.sqrt(bytes / (CHUNK_VOLUME * 4)));
   return Math.max(1, Math.floor((ring - 1) / 2) - 1);
 }
 
-/** ?radius=N, else the one picked on the start screen, else 3 on phones and 8 elsewhere; within what the GPU holds. */
-function viewDistance(params: URLSearchParams, device: GPUDevice, safe: boolean): number {
+/** ?radius=N, else the one picked on the start screen, else 3 on phones, 4 with WebGL2 and 8 elsewhere; within what the GPU holds. */
+function viewDistance(params: URLSearchParams, device: GPUDevice | undefined, safe: boolean): number {
   let stored: string | null = null;
   try { stored = localStorage.getItem(VIEW_KEY); } catch { /* storage blocked */ }
-  const asked = Number(params.get('radius') ?? stored ?? (matchMedia('(pointer: coarse)').matches ? ACTIVE_RADIUS : 8));
+  const fallback = matchMedia('(pointer: coarse)').matches ? ACTIVE_RADIUS : device ? 8 : 4;
+  const asked = Number(params.get('radius') ?? stored ?? fallback);
   return Math.min(maxViewDistance(device, safe), Math.max(1, Math.floor(asked) || ACTIVE_RADIUS));
 }
 
@@ -113,7 +115,7 @@ function showViewDistances(current: number, max: number, safe: boolean): void {
     });
     box.append(b, ' ');
   }
-  const limit = safe ? ` (up to ${max} in safe mode)` : ` (this GPU holds up to ${max})`;
+  const limit = safe ? ` (up to ${max} in safe mode)` : ` (up to ${max} here)`;
   box.append(`chunks${max < VIEW_DISTANCES[VIEW_DISTANCES.length - 1] ? limit : ''}`);
 }
 
@@ -138,7 +140,7 @@ async function main(): Promise<void> {
   let worldReady = false;
 
   log.info(`Block build ${__BUILD__}`);
-  setStatus('Starting WebGPU…');
+  setStatus('Starting the graphics…');
   const params = new URLSearchParams(location.search);
   // Safe mode (?safe): the world on the CPU and the previous renderer, for GPUs (some phones)
   // that crash on the GPU world or its renderer.
@@ -146,14 +148,28 @@ async function main(): Promise<void> {
   if (safe) log.info('Safe mode: world on the CPU, meshes built on the CPU, plain draws');
   // 4x MSAA smooths block edges (?msaa=0 turns it off; safe mode keeps it off, to stay simple).
   const msaa = !safe && params.get('msaa') !== '0';
-  const renderer = await Renderer.create(canvas, { offscreen: params.has('offscreen'), safe, msaa });
-  // Block textures ("Baunilha" by Mirtilo, CC BY-SA 4.0): until they load, or if they don't, blocks keep their procedural look.
-  loadBlockTextures(renderer.device)
+  // WebGPU, or where there's none (or it fails to start, or ?webgl asks), WebGL2: the world
+  // then lives on the CPU with meshes built there, as in safe mode.
+  let renderer: GameRenderer, device: GPUDevice | undefined, adapterInfo: GPUAdapterInfo | undefined;
+  try {
+    if (params.has('webgl')) throw new Error('?webgl');
+    const webgpu = await Renderer.create(canvas, { offscreen: params.has('offscreen'), safe, msaa });
+    renderer = webgpu;
+    ({ device, adapterInfo } = webgpu);
+  } catch (e) {
+    const [why] = log.describe(e);
+    if (params.has('webgl')) log.info('?webgl: drawing with WebGL2');
+    else log.warn(`No WebGPU (${why}): drawing with WebGL2 instead`);
+    renderer = GlRenderer.create(canvas, { msaa, offscreen: params.has('offscreen') });
+  }
+  // Block textures ("Baunilha" by Mirtilo, CC BY-SA 4.0): until they load, or if they don't, blocks keep their plain look.
+  fetchBlockTextures()
     .then((t) => renderer.setBlockTextures(t))
     .catch((e: unknown) => logError('Loading the block textures failed (plain blocks instead)', e));
-  log.info(`Antialiasing: ${msaa ? '4x MSAA' : 'off'}`);
+  log.info(`Graphics: ${renderer.api}; antialiasing: ${msaa ? '4x MSAA' : 'off'}`);
   setStatus('Starting TensorFlow.js…');
-  let tfBackend = await initTensorflow(renderer.device, renderer.adapterInfo);
+  // (With WebGL2, TF.js on WebGL too rather than a WebGPU device of its own.)
+  let tfBackend = await initTensorflow(device, adapterInfo, device ? undefined : ['webgl', 'cpu']);
   log.info(`TensorFlow.js backend: ${tfBackend}`);
   setStatus(`Compiling GPU kernels (${tfBackend})…`);
   try {
@@ -161,7 +177,6 @@ async function main(): Promise<void> {
   } catch (e) {
     logError('Kernel warm-up failed (kernels will compile on first use)', e);
   }
-  const { device } = renderer;
   const viewRadius = viewDistance(params, device, safe);
   const activeRadius = Math.min(viewRadius, MAX_SIMULATION_DISTANCE);
   const ghostRadius = viewRadius + 1;
@@ -172,20 +187,20 @@ async function main(): Promise<void> {
   // The world lives in GPU memory, where block updates, meshing and picking run. First
   // check that this GPU computes them exactly as the reference code does; if it doesn't,
   // the world lives on the CPU with the reference code instead (slower, same game).
-  const onCpu = safe || params.has('cpu');
+  const onCpu = safe || !device || params.has('cpu');
   if (!onCpu) setStatus('Checking the GPU world code…');
-  const check = onCpu ? { ok: false, summary: '', detail: safe ? 'safe mode' : '?cpu' }
+  const check = onCpu || !device ? { ok: false, summary: '', detail: safe ? 'safe mode' : !device ? renderer.api : '?cpu' }
     : await checkGpuStore(device).catch((e: unknown) => ({ ok: false, summary: '', detail: log.describe(e).join('\n') }));
   if (check.ok) log.info('GPU world check passed', check.summary);
   else if (!onCpu) log.warn('GPU world check failed: the world stays on the CPU', check.detail);
   setStatus('Setting up the world…');
-  const store: CellStore = check.ok && !onCpu
+  const store: CellStore = check.ok && !onCpu && device
     ? await GpuStore.create(device, ringSize(ghostRadius))
     : new CpuStore(ringSize(ghostRadius));
   log.info(store instanceof GpuStore ? 'World: in GPU memory' : 'World: on the CPU');
-  const meshes = safe ? new ClassicMeshes(device, meshSlotCount(viewRadius)) : new MeshPool(device, meshSlotCount(viewRadius));
+  const meshes = renderer.createMeshes(meshSlotCount(viewRadius));
   // The land beyond the chunks, out to at least 2 km (1 km past the chunks at long view distances).
-  const far = farLook !== 'off' ? new FarTerrain(device, Math.max(2048, (viewRadius + 1) * CHUNK_SIZE + 1024)) : undefined;
+  const far = farLook !== 'off' ? new FarTerrain(Math.max(2048, (viewRadius + 1) * CHUNK_SIZE + 1024)) : undefined;
   if (far) log.info(`Far terrain: out to ${far.extent} blocks, ${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB`);
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
@@ -216,7 +231,7 @@ async function main(): Promise<void> {
     ...(params.has('spread') && { grassSpread: chance('spread') }),
     ...(params.has('grow') && { wheatGrow: chance('grow'), wheatGrowWet: chance('grow') }),
   });
-  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)&msaa=0
+  // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)&msaa=0&webgl (WebGL2 even with WebGPU)
   const pos = (params.get('pos') ?? '8,52,8').split(',').map(Number) as [number, number, number];
   const controls = new Controls(canvas, pos);
   controls.flying = params.has('fly');
@@ -265,7 +280,7 @@ async function main(): Promise<void> {
 
   // A lost GPU device (a GPU crash or hang, or the browser reclaiming it) can't be used again:
   // stop, explain on the start screen, and open the log (gpu.ts has logged the browser's reason).
-  device.lost.then((info) => {
+  renderer.lost.then((info) => {
     gpuLost = true;
     if (document.pointerLockElement) document.exitPointerLock();
     if (controls.touchPlaying) controls.stopTouch();
@@ -273,16 +288,15 @@ async function main(): Promise<void> {
     document.body.classList.remove('playing');
     touchUI.setVisible(false);
     setStatus('The GPU stopped working', false);
-    showError(`WebGPU device lost (${info.reason}): ${(info.message || 'no details').replace(/\.$/, '')}. Tap or click to reload; `
-      + 'if WebGPU is then unavailable, fully close and reopen the browser.');
+    showError(`${renderer.api} ${renderer.api === 'WebGPU' ? 'device' : 'context'} lost (${info.reason}): ${(info.message || 'no details').replace(/\.$/, '')}. `
+      + 'Tap or click to reload; if it then fails, fully close and reopen the browser.');
     log.open();
   });
 
   // Console / automation handle, e.g. block.world.setCell(x, y, z, value).
   Object.assign(window, { block: { world, sim, controls, renderer, store, tf } });
 
-  const info = renderer.adapterInfo;
-  const gpuName = [info.vendor, info.architecture || info.device || info.description].filter(Boolean).join(' ') || 'unknown';
+  const gpuName = `${renderer.gpuName} (${renderer.api})`;
 
   let generating = false;
   /** The block placed (an index into BUILDING_BLOCKS). */
@@ -316,7 +330,7 @@ async function main(): Promise<void> {
     generating = true;
     generateMissing(world)
       .then(async (n) => {
-        await device.queue.onSubmittedWorkDone();
+        await device?.queue.onSubmittedWorkDone();
         // Each batch in the log, so a crash while generating shows how far it got.
         const { loaded, total } = world.haloProgress();
         log.info(`Generated ${n} chunks (${loaded} / ${total})`);
@@ -377,10 +391,10 @@ async function main(): Promise<void> {
       .finally(() => { readingMobBox = false; });
   };
   // Their models ("Cube Pets" by Kenney, CC0), animated, all sharing one texture.
-  const animalModels = new Map<string, MobModel>();
+  const animalModels = new Map<string, MobModelHandle>();
   let animalsReady = false;
   const animalFrames: PoseFrames = (name, clip, time) => poseFrames(animalModels.get(name)!, clip, time);
-  Promise.all(SPECIES.map((s) => loadMobModel(device, `models/${s.name}.bin`, 'models/pets.png').then((m) => animalModels.set(s.name, m))))
+  Promise.all(SPECIES.map((s) => fetchMobModel(`models/${s.name}.bin`, 'models/pets.png').then((m) => animalModels.set(s.name, renderer.createMobModel(m)))))
     .then(() => { animalsReady = true; })
     .catch((e: unknown) => logError('Loading the animal models failed (no animals)', e));
   let animalHitCooldown = 0;
@@ -591,9 +605,9 @@ async function main(): Promise<void> {
     // Load and mesh what's ahead first: chunks the camera sees, and a chunk around them (their neighbours, for meshing).
     world.focus = (x, z) => inView([(x - 1) * CHUNK_SIZE, 0, (z - 1) * CHUNK_SIZE], [(x + 2) * CHUNK_SIZE, CHUNK_HEIGHT, (z + 2) * CHUNK_SIZE]);
     renderer.render(viewProj, eye, now / 1000, fogDistance, buildLines(hit), meshes, draws, far?.ready ? {
-      vertex: far.vertex, index: far.index, indexCount: far.indexCount, seaY: SEA_SURFACE, look: farLook as 'mist' | 'silhouette' | 'colour', extent: far.extent,
-      // Safe mode draws chunks without fading them in.
-      coverage: world.coverage(performance.now(), safe ? 0 : FADE_MS),
+      vertices: far.vertices, indices: far.indices, version: far.version, seaY: SEA_SURFACE, look: farLook as 'mist' | 'silhouette' | 'colour', extent: far.extent,
+      // Safe mode and WebGL2 draw chunks without fading them in.
+      coverage: world.coverage(performance.now(), safe || !device ? 0 : FADE_MS),
     } : undefined, [...animals.instances(animalFrames)].map(([name, instances]) => ({ model: animalModels.get(name)!, instances })));
 
     const saved = world.savedCount(), counts = world.counts();

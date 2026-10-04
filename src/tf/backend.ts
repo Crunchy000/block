@@ -9,7 +9,7 @@ import { GEN_BATCH, generateChunksTensor } from './worldgen';
  * same device (one device for compute + rendering, and a path to sharing
  * buffers later). Falls back to WebGL, then CPU.
  */
-export async function initTensorflow(device?: GPUDevice, adapterInfo?: GPUAdapterInfo): Promise<string> {
+export async function initTensorflow(device?: GPUDevice, adapterInfo?: GPUAdapterInfo, backends = ['webgpu', 'webgl', 'cpu']): Promise<string> {
   // WebGL bakes tensor shapes into shaders unless told to pass them as uniforms;
   // with uniforms, differently sized regions reuse the same compiled programs.
   tf.env().set('WEBGL_USE_SHAPES_UNIFORMS', true);
@@ -18,7 +18,7 @@ export async function initTensorflow(device?: GPUDevice, adapterInfo?: GPUAdapte
     tf.removeBackend('webgpu');
     tf.registerBackend('webgpu', () => new WebGPUBackend(device, adapterInfo), 3);
   }
-  for (const name of ['webgpu', 'webgl', 'cpu']) {
+  for (const name of backends) {
     if (await trySetBackend(name)) return name;
   }
   throw new Error('No TensorFlow.js backend available');
@@ -71,7 +71,10 @@ export async function warmUpKernels(): Promise<void> {
   tf.env().set(flag, true);
   try {
     tf.tidy(() => { generateChunksTensor(coords); });
-    await (tf.backend() as unknown as { checkCompileCompletionAsync(): Promise<unknown> }).checkCompileCompletionAsync();
+    const b = tf.backend() as unknown as { checkCompileCompletionAsync(): Promise<unknown>; getUniformLocations?(): void };
+    await b.checkCompileCompletionAsync();
+    // WebGL compiles in parallel without looking up the programs' uniforms: do that now, or they fail when first run.
+    b.getUniformLocations?.();
   } finally {
     tf.env().set(flag, false);
   }

@@ -73,26 +73,27 @@ export function farIndices(n: number): Uint32Array<ArrayBuffer> {
   return idx;
 }
 
-/** The far terrain's GPU buffers, rebuilt around the player as they travel. */
+/** The far terrain's mesh, rebuilt around the player as they travel (a renderer uploads it when `version` changes). */
 export class FarTerrain {
   readonly axis: number[];
-  readonly vertex: GPUBuffer;
-  readonly index: GPUBuffer;
-  readonly indexCount: number;
-  /** Has a mesh to draw. */
-  ready = false;
+  readonly vertices: Float32Array<ArrayBuffer>;
+  readonly indices: Uint32Array<ArrayBuffer>;
+  /** Counts the rebuilds (0 before the first). */
+  version = 0;
   /** Where the current mesh is centred. */
   centre?: [number, number];
   private building = false;
 
-  constructor(private readonly device: GPUDevice, readonly extent: number, private readonly seed?: number) {
+  constructor(readonly extent: number, private readonly seed?: number) {
     this.axis = farAxis(extent);
     const n = this.axis.length;
-    const indices = farIndices(n);
-    this.indexCount = indices.length;
-    this.vertex = device.createBuffer({ label: 'far terrain vertices', size: n * n * 12, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
-    this.index = device.createBuffer({ label: 'far terrain indices', size: indices.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(this.index, 0, indices);
+    this.indices = farIndices(n);
+    this.vertices = new Float32Array(n * n * 3);
+  }
+
+  /** Has a mesh to draw. */
+  get ready(): boolean {
+    return this.version > 0;
   }
 
   get points(): number {
@@ -100,7 +101,7 @@ export class FarTerrain {
   }
 
   get bytes(): number {
-    return this.vertex.size + this.index.size;
+    return this.vertices.byteLength + this.indices.byteLength;
   }
 
   /** Recentre on the player once they've moved to another FAR_SNAP cell (in the background). */
@@ -110,19 +111,14 @@ export class FarTerrain {
     this.building = true;
     farHeights(this.axis, cx, cz, this.seed)
       .then((heights) => {
-        this.device.queue.writeBuffer(this.vertex, 0, farVertices(this.axis, cx, cz, heights));
+        this.vertices.set(farVertices(this.axis, cx, cz, heights));
         this.centre = [cx, cz];
-        this.ready = true;
+        this.version++;
       })
       .catch((e: unknown) => {
         const [text, stack] = log.describe(e);
         log.warn(`Far terrain failed: ${text}`, stack);
       })
       .finally(() => { this.building = false; });
-  }
-
-  destroy(): void {
-    this.vertex.destroy();
-    this.index.destroy();
   }
 }

@@ -1,43 +1,18 @@
+import type { MeshTarget } from '../sim/store';
 import type { ChunkDraw } from '../world/world';
+import { blockTexturesOnGpu, type BlockTextureData } from './blockTextures';
 import { requestGpu } from './gpu';
 import { ClassicMeshes, VERTEX_FLOATS } from './classicMeshes';
-import type { MeshPool } from './meshPool';
-import { MOB_VERTEX_FLOATS, type MobModel } from './mobModel';
+import { MeshPool } from './meshPool';
+import { MOB_VERTEX_FLOATS, mobModelOnGpu, type MobModel, type MobModelData } from './mobModel';
 import { blockShader, classicBlockShader, farShader, lineShader, mobShader } from './shaders';
+import { MIST_FOG, SKY, type FarDraw, type GameRenderer, type MobDraw } from './types';
 
 /** Reversed depth (math.ts perspective): float depth keeps precision at any view distance. */
 const DEPTH: GPUTextureFormat = 'depth32float';
 
-export const SKY: [number, number, number] = [0.55, 0.75, 0.95];
-/** In mist, fog stops this thick: chunks past the fog keep a trace of themselves, and the far terrain carries on from there. */
-export const MIST_FOG = 0.85;
-
-/** The far terrain to draw (world/farTerrain.ts): an indexed triangle list of positions. */
-export interface FarDraw {
-  vertex: GPUBuffer;
-  index: GPUBuffer;
-  indexCount: number;
-  /**
-   * Which chunks are drawn and fully faded in (world.coverage): the far terrain isn't drawn
-   * there. Chunks still loading or fading in keep it underneath, so there are no holes.
-   */
-  coverage: { x0: number; z0: number; size: number; data: Uint8Array<ArrayBuffer> };
-  /** The y of the sea's surface. */
-  seaY: number;
-  /** How it looks: mist (a little darker than the fog), a dark silhouette, or colours. */
-  look: 'mist' | 'silhouette' | 'colour';
-  /** How far it reaches (blocks). */
-  extent: number;
-}
-
-/**
- * Mobs of one kind to draw: a model, and per mob 8 floats: x, y, z, yaw, then the two frames
- * of the model's poses it's between and how far (render/mobModel.ts poseFrames), and 0.
- */
-export interface MobDraw {
-  model: MobModel;
-  instances: Float32Array<ArrayBuffer>;
-}
+export { SKY, MIST_FOG } from './types';
+export type { FarDraw, MobDraw } from './types';
 
 export interface RendererOptions {
   /**
@@ -59,7 +34,8 @@ export interface RendererOptions {
   msaa?: boolean;
 }
 
-export class Renderer {
+export class Renderer implements GameRenderer {
+  readonly api = 'WebGPU';
   private context?: GPUCanvasContext;
   private context2d?: CanvasRenderingContext2D;
   private colorTarget?: GPUTexture;
@@ -88,6 +64,10 @@ export class Renderer {
   private farGroup?: GPUBindGroup;
   private farLayout!: GPUBindGroupLayout;
   private coverage?: GPUTexture;
+  /** The far terrain's buffers, and which version of its mesh they hold. */
+  private farVertex?: GPUBuffer;
+  private farIndex?: GPUBuffer;
+  private farVersion = -1;
   private mobPipeline!: GPURenderPipeline;
   private mobLayout!: GPUBindGroupLayout;
   private readonly mobGroups = new Map<MobModel, GPUBindGroup>();
@@ -296,10 +276,28 @@ export class Renderer {
     });
   }
 
+  get lost(): Promise<{ reason: string; message: string }> {
+    return this.device.lost.then((info) => ({ reason: info.reason, message: info.message }));
+  }
+
+  get gpuName(): string {
+    const i = this.adapterInfo;
+    return [i.vendor, i.architecture || i.device || i.description].filter(Boolean).join(' ') || 'unknown';
+  }
+
+  /** Chunk meshes: GPU-built face records (MeshPool), or in safe mode CPU-built vertex buffers (ClassicMeshes). */
+  createMeshes(slots: number): MeshPool | ClassicMeshes {
+    return this.options.safe ? new ClassicMeshes(this.device, slots) : new MeshPool(this.device, slots);
+  }
+
+  createMobModel(data: MobModelData): MobModel {
+    return mobModelOnGpu(this.device, data);
+  }
+
   /** Texture the blocks with these layers (render/blockTextures.ts) from now on. */
-  setBlockTextures(texture: GPUTexture): void {
+  setBlockTextures(data: BlockTextureData): void {
     this.blockTextures.destroy();
-    this.blockTextures = texture;
+    this.blockTextures = blockTexturesOnGpu(this.device, data);
     this.textured = true;
     this.bindGroup = undefined;
   }
@@ -360,8 +358,10 @@ export class Renderer {
    */
   render(
     viewProj: Float32Array, cam: readonly number[], time: number, fogDistance: number, lines: Float32Array<ArrayBuffer>,
-    pool: MeshPool | ClassicMeshes, draws: ChunkDraw[], far?: FarDraw, mobs: MobDraw[] = [],
+    meshes: MeshTarget, draws: ChunkDraw[], far?: FarDraw, mobDraws: MobDraw[] = [],
   ): void {
+    const pool = meshes as MeshPool | ClassicMeshes;
+    const mobs = mobDraws as Array<{ model: MobModel; instances: Float32Array<ArrayBuffer> }>;
     // A canvas throttles us to what the GPU can present; offscreen nothing does, and on a
     // slow GPU frames would pile up in the queue ahead of the block-update work. Skip
     // frames until the previous one is done.
@@ -405,6 +405,18 @@ export class Renderer {
       }
     }
     if (far) {
+      if (!this.farVertex || this.farVertex.size !== far.vertices.byteLength) {
+        this.farVertex?.destroy();
+        this.farIndex?.destroy();
+        this.farVertex = device.createBuffer({ label: 'far terrain vertices', size: far.vertices.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+        this.farIndex = device.createBuffer({ label: 'far terrain indices', size: far.indices.byteLength, usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST });
+        device.queue.writeBuffer(this.farIndex, 0, far.indices);
+        this.farVersion = -1;
+      }
+      if (far.version !== this.farVersion) {
+        device.queue.writeBuffer(this.farVertex, 0, far.vertices);
+        this.farVersion = far.version;
+      }
       const { x0, z0, size, data } = far.coverage;
       device.queue.writeBuffer(this.farUniforms, 0, new Float32Array([x0 * 16, z0 * 16, size, 0, far.seaY, ['colour', 'silhouette', 'mist'].indexOf(far.look), far.extent, 0]));
       // The coverage map: one byte a chunk, re-made when its size changes.
@@ -457,9 +469,9 @@ export class Renderer {
     if (far) {
       pass.setPipeline(this.farPipeline);
       pass.setBindGroup(0, this.farGroup!);
-      pass.setVertexBuffer(0, far.vertex);
-      pass.setIndexBuffer(far.index, 'uint32');
-      pass.drawIndexed(far.indexCount);
+      pass.setVertexBuffer(0, this.farVertex!);
+      pass.setIndexBuffer(this.farIndex!, 'uint32');
+      pass.drawIndexed(far.indices.length);
       pass.setBindGroup(0, this.groupFor(pool));
     }
 

@@ -8,7 +8,7 @@ where, which are awake); per tick it gets back a few bytes of flags.
 
 ```
 npm install
-npm run dev        # http://localhost:5173 — needs a WebGPU browser (Chrome/Edge 113+, Safari 26+, Firefox 141+)
+npm run dev        # http://localhost:5173 — best with WebGPU (Chrome/Edge 113+, Safari 26+, Firefox 141+); WebGL2 otherwise
 npm test           # the world on the CPU reference store, rules, meshing, worldgen (Node, TF.js CPU backend)
 npm run test:gpu   # everything on the GPU vs the reference, in headless Chromium with WebGPU (Playwright)
 npm run build
@@ -119,9 +119,18 @@ the land, and plain vertex buffers, so safe mode shows it too (`src/world/farTer
 **Safe mode** (`?safe`, linked from the start screen): the world on the CPU and the previous renderer (meshes built
 on the CPU, plain indexed draws), for GPUs that crash on the GPU world, as an Adreno 6xx phone on Android 10 did.
 
+**WebGL2** (`src/render/glRenderer.ts`, `glShaders.ts`): where there's no WebGPU, or it fails to start (or with
+`?webgl`), the game draws with WebGL2 instead, picking it by itself. Everything is there, drawn as in safe mode: the
+world on the CPU (`CpuStore`: generation, mining and placing, picking, block updates), world generation with TF.js on
+WebGL (or the CPU), meshes built on the CPU, the textured blocks, far terrain, animated animals, the selection outline
+and 4x MSAA (a multisampled framebuffer with float depth, resolved onto the canvas; reversed depth where the browser
+has `EXT_clip_control`). Chunks appear without fading in, and the view distance defaults to 4 (up to 8), since
+generating and meshing on the CPU is slower. Both renderers implement one interface (`src/render/types.ts`): chunk
+meshes, block textures and animal models are fetched as plain data and each renderer uploads its own.
+
 URL params: `?radius=N` view distance in chunks · `pos=x,y,z` · `yaw=` / `pitch=` (radians) ·
 `chunks` (outlines on) · `spread=` grass spread chance per tick (default 1/16, 0 = never) ·
-`grow=` wheat growth chance per tick (default 1/40, 1/12 next to water) · `offscreen` (render to a
+`grow=` wheat growth chance per tick (default 1/40, 1/12 next to water) · `webgl` (draw with WebGL2 even where WebGPU works) · `offscreen` (render to a
 texture and copy it to a 2D canvas, for headless browsers where WebGPU canvas presentation isn't available) ·
 `cpu` (keep the world on the CPU with the reference code instead, for comparison).
 
@@ -152,7 +161,7 @@ grass and wheat taking over the terrain around spawn and logs tick times.
 | `src/tf/worldgen.ts` | Batched chunk generation as one TF graph: fBm heightmap → stone/dirt, sand beaches and gravel sea floors, sea-level water, 3D-noise caves, deep lava lakes, grass-topped land, ripe wild wheat (off for now) |
 | `src/world/farTerrain.ts` | Far terrain: the ground-height formula sampled on a widening grid around the player, drawn beyond the chunks |
 | `src/tf/noise.ts` | Value noise / fBm built from elementwise tensor ops |
-| `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`** (so worldgen output can be copied GPU to GPU); falls back to WebGL, then CPU; pre-compiles kernels |
+| `src/tf/backend.ts` | Runs TF.js's WebGPU backend **on the renderer's `GPUDevice`** (so worldgen output can be copied GPU to GPU); falls back to WebGL, then CPU (WebGL first when drawing with WebGL2); pre-compiles kernels |
 | `src/sim/rules.ts` | Every block-update rule as WGSL, shared by the GPU world and the TF.js kernel |
 | `src/sim/gpuStore.ts` | **The world in GPU memory**: ticks in place, per-chunk flags, picking, chunk reads/writes |
 | `src/sim/gpuWorldgen.ts` | World generation as one compute shader, straight into the world's slots (`tf/worldgen.ts` ported op for op) |
@@ -163,6 +172,7 @@ grass and wheat taking over the terrain around spawn and logs tick times.
 | `src/render/mesher.ts` | Face records (one `u32` per quad) and the reference mesher |
 | `src/render/gpuMesher.ts` | The mesher as a compute shader, writing face records and indirect draw counts |
 | `src/render/blockTextures.ts` | The block texture layers (Baunilha) and their mipmaps |
+| `src/render/glRenderer.ts`, `glShaders.ts` | The WebGL2 renderer and its GLSL shaders, for browsers without WebGPU |
 | `src/render/` (rest) | Mesh pool, WGSL shaders (vertex pulling from face records), renderer (opaque, lines, translucent water) |
 | `src/tf/blockUpdateReference.ts` | The rules cell by cell in plain JS: the readable spec, and the oracle every other version is tested against |
 | `src/tf/blockUpdate.ts`, `blockUpdateKernel.ts` | The rules as TF.js tensor ops, and as a TF.js custom kernel (the previous design's tick, kept for the benchmark) |
