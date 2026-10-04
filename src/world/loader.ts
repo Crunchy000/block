@@ -1,8 +1,30 @@
 import { GEN_BATCH, generateChunksTensor } from '../tf/worldgen';
+import type { WorldgenWorker } from './jsWorldgen';
 import type { World } from './world';
 
 /** Chunks per batch for the worldgen shader (TF.js batches stay at GEN_BATCH). */
 export const SHADER_BATCH = 64;
+/** Chunks per batch for the plain-JS generator's worker (safe mode): small, so the nearest arrive first. */
+export const WORKER_BATCH = 4;
+
+/** Generate the nearest missing chunks with the plain-JS generator in its worker (safe mode, no TF.js). */
+export async function generateMissingJs(world: World, worker: WorldgenWorker, seed?: number): Promise<number> {
+  const chunks = world.missingChunks(WORKER_BATCH);
+  if (chunks.length === 0) return 0;
+  world.markGenerating(chunks);
+  try {
+    const cells = await worker.generate(chunks.map(({ cx, cz }) => ({ cx, cz })), seed);
+    chunks.forEach((chunk, k) => {
+      if (!world.isResident(chunk) || chunk.loaded) return; // left the halo meanwhile
+      world.store.writeChunk(chunk.slot, cells[k]);
+      world.markLoaded(chunk);
+    });
+  } catch (e) {
+    world.markGenerated(chunks);
+    throw e;
+  }
+  return chunks.length;
+}
 
 /**
  * Generate the nearest missing chunks (up to SHADER_BATCH or GEN_BATCH) and write them into their store

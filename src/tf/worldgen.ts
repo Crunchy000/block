@@ -4,31 +4,17 @@ import {
 } from '../constants';
 import { fbm2, hash12, valueNoise3 } from './noise';
 
-export interface ChunkCoord { cx: number; cz: number }
-
-export const DEFAULT_SEED = 1337;
+// The world's settings, shared with the plain-JS generator (world/jsWorldgen.ts) without TF.js.
+export {
+  DEFAULT_SEED, DIAMOND_MAX_Y, DIAMOND_THRESHOLD, SAND_ABOVE, SAND_BELOW, WHEAT_PATCH_CHANCE, WILD_WHEAT, type ChunkCoord,
+} from '../world/worldgenParams';
+import { DEFAULT_SEED, DIAMOND_MAX_Y, DIAMOND_THRESHOLD, SAND_ABOVE, SAND_BELOW, WHEAT_PATCH_CHANCE, WILD_WHEAT, type ChunkCoord } from '../world/worldgenParams';
 
 /**
  * Chunks per generation batch. Batches are always padded to this size so every
  * batch has the same shapes and runs the same (already compiled) GPU kernels.
  */
 export const GEN_BATCH = 16;
-
-/** Diamond ore: deep stone (y up to DIAMOND_MAX_Y) where 3D noise at a 3-block scale is above this. */
-export const DIAMOND_THRESHOLD = 0.82;
-export const DIAMOND_MAX_Y = 24;
-
-/** Chance that a 4x4-column area of dry land has a patch of wild wheat (at random growth stages). */
-export const WHEAT_PATCH_CHANCE = 1 / 256;
-/** Whether wild wheat is generated at all (off for now: its texture is being redone). */
-export const WILD_WHEAT = false;
-/**
- * Sand and gravel instead of dirt in the top 3 blocks: beaches of sand where the ground is
- * from SAND_BELOW blocks under sea level to SAND_ABOVE above it (no grass on them), gravel
- * on the sea floor deeper than that.
- */
-export const SAND_BELOW = 3;
-export const SAND_ABOVE = 1;
 
 /**
  * Generate a batch of chunks in one TF graph.

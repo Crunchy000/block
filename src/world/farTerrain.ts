@@ -84,7 +84,8 @@ export class FarTerrain {
   centre?: [number, number];
   private building = false;
 
-  constructor(readonly extent: number, private readonly seed?: number) {
+  /** `heights` works out the ground's heights on the grid: TF.js (farHeights), or plain JS (jsWorldgen farHeightsJs). */
+  constructor(readonly extent: number, private readonly seed?: number, private readonly heights = farHeights) {
     this.axis = farAxis(extent);
     const n = this.axis.length;
     this.indices = farIndices(n);
@@ -109,7 +110,7 @@ export class FarTerrain {
     const cx = Math.round(x / FAR_SNAP) * FAR_SNAP, cz = Math.round(z / FAR_SNAP) * FAR_SNAP;
     if (this.building || (this.centre?.[0] === cx && this.centre[1] === cz)) return;
     this.building = true;
-    farHeights(this.axis, cx, cz, this.seed)
+    this.heights(this.axis, cx, cz, this.seed)
       .then((heights) => {
         this.vertices.set(farVertices(this.axis, cx, cz, heights));
         this.centre = [cx, cz];

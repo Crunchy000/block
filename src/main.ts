@@ -28,7 +28,8 @@ import { Sounds } from './ui/sounds';
 import { Drops, diamondDropCount } from './world/drops';
 import { Animals, SPECIES, type PoseFrames } from './world/animals';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
-import { generateMissing } from './world/loader';
+import { farHeightsJs, WorldgenWorker } from './world/jsWorldgen';
+import { generateMissing, generateMissingJs } from './world/loader';
 import { World, meshSlotCount } from './world/world';
 
 const TICK_MS = 200;          // block-update rate (5 ticks / second)
@@ -168,15 +169,20 @@ async function main(): Promise<void> {
     .then((t) => renderer.setBlockTextures(t))
     .catch((e: unknown) => logError('Loading the block textures failed (plain blocks instead)', e));
   log.info(`Graphics: ${renderer.api}; antialiasing: ${msaa ? '4x MSAA' : 'off'}`);
-  setStatus('Starting TensorFlow.js…');
-  // (With WebGL2, TF.js on WebGL too rather than a WebGPU device of its own.)
-  let tfBackend = await initTensorflow(device, adapterInfo, device ? undefined : ['webgl', 'cpu']);
-  log.info(`TensorFlow.js backend: ${tfBackend}`);
-  setStatus(`Compiling GPU kernels (${tfBackend})…`);
-  try {
-    await warmUpKernels();
-  } catch (e) {
-    logError('Kernel warm-up failed (kernels will compile on first use)', e);
+  // World generation: with WebGPU, the worldgen shader (TF.js too, should the GPU world fail its
+  // check); in safe mode, the plain-JS generator in a worker, and no TF.js at all.
+  const worldgenWorker = safe ? new WorldgenWorker() : undefined;
+  let tfBackend = 'none';
+  if (!safe) {
+    setStatus('Starting TensorFlow.js…');
+    tfBackend = await initTensorflow(device, adapterInfo);
+    log.info(`TensorFlow.js backend: ${tfBackend}`);
+    setStatus(`Compiling GPU kernels (${tfBackend})…`);
+    try {
+      await warmUpKernels();
+    } catch (e) {
+      logError('Kernel warm-up failed (kernels will compile on first use)', e);
+    }
   }
   const viewRadius = viewDistance(params, device, safe);
   const activeRadius = Math.min(viewRadius, safe ? SAFE_SIMULATION_DISTANCE : MAX_SIMULATION_DISTANCE);
@@ -204,7 +210,7 @@ async function main(): Promise<void> {
   log.info(store instanceof GpuStore ? 'World: in GPU memory' : 'World: on the CPU');
   const meshes = renderer.createMeshes(meshSlotCount(viewRadius));
   // The land beyond the chunks, out to at least 2 km (1 km past the chunks at long view distances).
-  const far = farLook !== 'off' ? new FarTerrain(Math.max(2048, (viewRadius + 1) * CHUNK_SIZE + 1024)) : undefined;
+  const far = farLook !== 'off' ? new FarTerrain(Math.max(2048, (viewRadius + 1) * CHUNK_SIZE + 1024), undefined, safe ? farHeightsJs : undefined) : undefined;
   if (far) log.info(`Far terrain: out to ${far.extent} blocks, ${far.points.toLocaleString()} points, ${(far.bytes / 2 ** 20).toFixed(1)} MB`);
 
   // If the TF backend breaks at runtime (e.g. a driver limit), drop to the next one.
@@ -335,14 +341,14 @@ async function main(): Promise<void> {
   const pumpGeneration = () => {
     if (generating || switching || world.missingChunks(1).length === 0) return;
     generating = true;
-    generateMissing(world)
+    (worldgenWorker ? generateMissingJs(world, worldgenWorker) : generateMissing(world))
       .then(async (n) => {
         await device?.queue.onSubmittedWorkDone();
         // Each batch in the log, so a crash while generating shows how far it got.
         const { loaded, total } = world.haloProgress();
         log.info(`Generated ${n} chunks (${loaded} / ${total})`);
       })
-      .catch(onTfError('worldgen'))
+      .catch(worldgenWorker ? (e: unknown) => logError('World generation failed', e) : onTfError('worldgen'))
       .finally(() => { generating = false; });
   };
 
@@ -619,7 +625,7 @@ async function main(): Promise<void> {
 
     const saved = world.savedCount(), counts = world.counts();
     hud.textContent = [
-      `fps ${fps.toFixed(0)}   gpu: ${gpuName}   world generation: ${store.generate ? 'compute shader' : `TF.js on ${tfBackend}`}`,
+      `fps ${fps.toFixed(0)}   gpu: ${gpuName}   world generation: ${worldgenWorker ? 'plain JS (worker)' : store.generate ? 'compute shader' : `TF.js on ${tfBackend}`}`,
       `pos ${px.toFixed(1)} ${py.toFixed(1)} ${pz.toFixed(1)}   chunk ${world.window.cx},${world.window.cz}`,
       `chunks: ${counts.inView} in view (${draws.length} drawn), ${counts.active} simulated (${world.awakeCount()} awake, ` +
         `${sim.growingChunks} growing plants)${saved ? `, ${saved} changed ones saved` : ''}`,
