@@ -42,7 +42,7 @@ const VIEW_KEY = 'block.viewDistance';
 const FAR_KEY = 'block.farTerrain';
 /** Block updates run this far out at most (chunks; in safe mode, on the CPU, less); beyond it chunks are drawn but frozen. */
 const MAX_SIMULATION_DISTANCE = 8;
-const SAFE_SIMULATION_DISTANCE = 4;
+const SAFE_SIMULATION_DISTANCE = 1;
 
 /**
  * The furthest view distance this GPU can hold: the cells of every loaded chunk (the view
