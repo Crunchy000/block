@@ -183,8 +183,9 @@ async function main(): Promise<void> {
   const ghostRadius = viewRadius + 1;
   log.info(`View distance ${viewRadius} (${(2 * viewRadius + 1) ** 2} chunks drawn), simulation distance ${activeRadius}`);
   showViewDistances(viewRadius, maxViewDistance(device, safe), safe);
-  const farLook = farStyle(params);
-  showFarTerrain(farLook);
+  // Safe mode leaves the far terrain out (unless ?far= asks for it), and its switch off the start screen.
+  const farLook = safe && !params.has('far') ? 'off' : farStyle(params);
+  if (!safe) showFarTerrain(farLook);
   // The world lives in GPU memory, where block updates, meshing and picking run. First
   // check that this GPU computes them exactly as the reference code does; if it doesn't,
   // the world lives on the CPU with the reference code instead (slower, same game).

@@ -120,9 +120,10 @@ the land, and plain vertex buffers, so safe mode shows it too (`src/world/farTer
 fails to start): for browsers without WebGPU and GPUs that crash on the GPU world (as an Adreno 6xx phone on Android 10
 did). It draws with WebGL2 (`src/render/glRenderer.ts`, `glShaders.ts`) and keeps the world on the CPU (`CpuStore`:
 generation, mining and placing, picking, block updates), with world generation on TF.js's WebGL backend (or the CPU)
-and meshes built on the CPU. Everything is there: the textured blocks, far terrain, animated animals, the selection
+and meshes built on the CPU. It draws the textured blocks, animated animals, the selection
 outline and 4x MSAA (a multisampled framebuffer with float depth, resolved onto the canvas; reversed depth where the
-browser has `EXT_clip_control`). Chunks appear without fading in, the view distance defaults to 4 (up to 8), and block
+browser has `EXT_clip_control`). Chunks appear without fading in, there's no far terrain (unless `?far=` asks for it), the view distance defaults
+to 4 (up to 8), and block
 updates (water flowing, grass spreading, wheat growing) are off to start with, since on the CPU they stall the game
 (`P` turns them on, in the player's chunk and the 8 around it).
 Both renderers implement one interface (`src/render/types.ts`): chunk meshes, block textures and animal models are
