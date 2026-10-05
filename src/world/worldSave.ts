@@ -1,13 +1,13 @@
 /**
  * Edited chunks kept between visits, in the browser's IndexedDB: one record per chunk that
  * differs from the generated world (its cells as bytes), under the name of the world it
- * belongs to (safe mode's world and the WebGPU one generate differently, so each has its own).
+ * belongs to.
  * Chunks that were never changed aren't stored: they regenerate the same.
  */
 const DB = 'block-world';
 const STORE = 'chunks';
 /** Bump when generation changes so that old saves no longer fit the world around them. */
-const VERSION = 'v1';
+const VERSION = 'v2'; // v2: the worldgen hash that's the same on every device
 
 function request<T>(r: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {

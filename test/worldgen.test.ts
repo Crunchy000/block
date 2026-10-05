@@ -34,7 +34,8 @@ describe('generateChunks', () => {
 
   it('produces the materials, with plants placed on the ground', async () => {
     const coords: ChunkCoord[] = [];
-    for (let cz = -3; cz <= 3; cz++) for (let cx = -3; cx <= 3; cx++) coords.push({ cx, cz });
+    // (Spread out, so the sample has sea and land whatever the terrain near the origin is.)
+    for (let cz = -3; cz <= 3; cz++) for (let cx = -3; cx <= 3; cx++) coords.push({ cx: cx * 6, cz: cz * 6 });
     const chunks: Uint8Array[] = [];
     for (let i = 0; i < coords.length; i += GEN_BATCH) chunks.push(...await generateChunks(coords.slice(i, i + GEN_BATCH)));
     expect(chunks).toHaveLength(coords.length);

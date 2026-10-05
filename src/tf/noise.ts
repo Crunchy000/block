@@ -3,13 +3,26 @@ import * as tf from '@tensorflow/tfjs';
 // Value noise built from elementwise tensor ops, so every sample in a batch
 // of chunks is evaluated in parallel on the TF backend.
 
-/** Classic shader hash: fract(sin(dot(p, k)) * 43758.5453) in [0, 1). */
+/**
+ * Hash of integer lattice coordinates in [0, 1): the permutation polynomial (34v + 1)v mod 289
+ * (as in Ashima's simplex noise), chained over the coordinates. Every intermediate value is an
+ * integer below 2^24, exact in float32, so the TF.js backends, the worldgen shader
+ * (sim/gpuWorldgen.ts) and the plain-JS generator (world/jsWorldgen.ts) make the same world on
+ * every device (a sine hash amplifies each platform's rounding into different values). The
+ * noise repeats every 289 lattice cells along each axis.
+ */
+const HASH_P = 289;
+/**
+ * v mod 289 for integer v (|v| up to a few million): floor((v + 0.5) / 289) stays clear of
+ * rounding either way, even with a GPU's less exact division.
+ */
+const mod289 = (v: tf.Tensor) => v.sub(v.add(0.5).div(HASH_P).floor().mul(HASH_P));
+/** (34v + 1)v mod 289 for v in [0, 289), reduced on the way so every value stays below 84,000. */
+const permute = (v: tf.Tensor) => mod289(mod289(v.mul(34).add(1)).mul(v));
 export function hash(...coords: tf.Tensor[]): tf.Tensor {
-  const k = [127.1, 311.7, 74.7];
-  let dot = coords[0].mul(k[0]);
-  for (let i = 1; i < coords.length; i++) dot = dot.add(coords[i].mul(k[i]));
-  const s = dot.sin().mul(43758.5453);
-  return s.sub(s.floor());
+  let h = permute(mod289(coords[0]));
+  for (let i = 1; i < coords.length; i++) h = permute(mod289(h.add(mod289(coords[i]))));
+  return h.div(HASH_P);
 }
 
 /**

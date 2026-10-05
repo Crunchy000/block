@@ -7,17 +7,20 @@ import {
  * World generation in plain JavaScript, for safe mode (no TensorFlow.js there): the layers of
  * tf/worldgen.ts, a column at a time as the worldgen shader (sim/gpuWorldgen.ts) does them.
  * Every step is rounded to float32 (f) in the order TF.js does its tensor ops, so the world
- * comes out as TF.js's CPU backend makes it (the sine hash amplifies the smallest rounding
- * difference into a different value).
+ * comes out as TF.js makes it; and with the hash exact in float32, as the GPU makes it too.
  */
 const f = Math.fround;
-const K1 = f(127.1), K2 = f(311.7), K3 = f(74.7), SCALE = f(43758.5453);
 const fract = (v: number) => f(v - Math.floor(v));
 const smooth = (t: number) => f(f(t * t) * f(f(t * -2) + 3));
 const lerp = (a: number, b: number, t: number) => f(a + f(f(b - a) * t));
-const sineHash = (dot: number) => fract(f(f(Math.sin(dot)) * SCALE));
-const hash2 = (a: number, b: number) => sineHash(f(f(a * K1) + f(b * K2)));
-const hash3 = (a: number, b: number, c: number) => sineHash(f(f(f(a * K1) + f(b * K2)) + f(c * K3)));
+// The permutation hash of tf/noise.ts. Its steps are whole numbers (below 2^24, exact in float32
+// and here alike), so it's plain integer arithmetic, the permutation a table; only the last
+// division is rounded to float32 as TF.js and the shader do it.
+const mod289 = (v: number) => ((v % 289) + 289) % 289;
+const PERMUTE = Array.from({ length: 289 }, (_, v) => ((34 * v + 1) * v) % 289);
+const hash2 = (a: number, b: number) => f(PERMUTE[(PERMUTE[mod289(a)] + mod289(b)) % 289] / 289);
+const hash3 = (a: number, b: number, c: number) =>
+  f(PERMUTE[(PERMUTE[(PERMUTE[mod289(a)] + mod289(b)) % 289] + mod289(c)) % 289] / 289);
 
 function valueNoise2(x: number, z: number, seed: number): number {
   const xi = Math.floor(x), zi = f(Math.floor(z) + seed);
@@ -59,6 +62,22 @@ function hash12(x: number, z: number, seed: number): number {
 export function terrainHeightAt(wx: number, wz: number, seed = DEFAULT_SEED): number {
   const continents = fbm2(wx, wz, seed, 128, 3), hills = fbm2(wx, wz, seed + 17, 32, 4);
   return Math.floor(f(f(f(f(continents - 0.5) * 36) + f(f(hills - 0.5) * 14)) + SEA_LEVEL + 2));
+}
+
+/**
+ * Where a new player starts: above the nearest grassy column to (8, 8) (dry land, not beach),
+ * a little above the ground so they land on it. (The camera's position: the eyes.)
+ */
+export function spawnPoint(seed = DEFAULT_SEED): [number, number, number] {
+  for (let r = 0; r < 512; r += 4) {
+    for (let a = 0; a < 16; a++) {
+      const x = Math.round(8 + r * Math.cos((a / 16) * 2 * Math.PI)), z = Math.round(8 + r * Math.sin((a / 16) * 2 * Math.PI));
+      const h = terrainHeightAt(x, z, seed);
+      if (h > SEA_LEVEL + SAND_ABOVE) return [x + 0.5, h + 3, z + 0.5];
+      if (r === 0) break;
+    }
+  }
+  return [8, 52, 8];
 }
 
 /** Ground heights on the far terrain's grid (as world/farTerrain.ts farHeights, without TF.js). */

@@ -28,7 +28,7 @@ import { Sounds } from './ui/sounds';
 import { Drops, diamondDropCount } from './world/drops';
 import { Animals, SPECIES, type PoseFrames } from './world/animals';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
-import { farHeightsJs, WorldgenWorker } from './world/jsWorldgen';
+import { farHeightsJs, spawnPoint, WorldgenWorker } from './world/jsWorldgen';
 import { generateMissing, generateMissingJs } from './world/loader';
 import { WorldSave } from './world/worldSave';
 import { World, meshSlotCount } from './world/world';
@@ -233,8 +233,9 @@ async function main(): Promise<void> {
       .finally(() => { switching = false; });
   };
 
-  // Edits are kept between visits (IndexedDB), per world: safe mode's generates differently from WebGPU's.
-  const worldName = safe ? 'safe' : 'webgpu';
+  // Edits are kept between visits (IndexedDB). Every mode and device generates the same world, so
+  // they share one save.
+  const worldName = 'main';
   const save = await WorldSave.open(worldName);
   log.info(save ? `World save: ${save.keys.size} edited chunks (${worldName})` : 'World save: unavailable (edits last until the page closes)');
   const world = new World(store, activeRadius, ghostRadius, viewRadius, save);
@@ -248,13 +249,12 @@ async function main(): Promise<void> {
   });
   // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)&msaa=0&safe (or webgl: WebGL2, the world on the CPU)
   // (Safe mode's world differs in its details, and the usual start is in the sea there: it starts on land.)
-  // Where the player was last time in this world, else the start (safe mode's world differs in its
-  // details, and the usual start is in the sea there: it starts on land).
-  const PLAYER_KEY = `block.player.${worldName}`;
+  // Where the player was last time in this world, else the start: on dry land, the nearest to the origin.
+  const PLAYER_KEY = `block.player.v2.${worldName}`;
   let lastVisit: number[] | undefined;
   try { lastVisit = localStorage.getItem(PLAYER_KEY)?.split(',').map(Number); } catch { /* storage blocked */ }
   if (lastVisit && (lastVisit.length !== 4 || lastVisit.some((v) => !Number.isFinite(v)))) lastVisit = undefined;
-  const pos = (params.get('pos')?.split(',').map(Number) ?? lastVisit?.slice(0, 3) ?? (safe ? [9, 35, 129] : [8, 52, 8])) as [number, number, number];
+  const pos = (params.get('pos')?.split(',').map(Number) ?? lastVisit?.slice(0, 3) ?? spawnPoint()) as [number, number, number];
   const controls = new Controls(canvas, pos);
   controls.flying = params.has('fly');
   if (lastVisit && !params.has('pos')) controls.yaw = lastVisit[3];

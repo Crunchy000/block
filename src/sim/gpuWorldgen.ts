@@ -31,13 +31,14 @@ const SEA: f32 = ${SEA_LEVEL}.0;
 
 // tf/noise.ts, written out the way its tensor ops compute.
 fn fract1(v: f32) -> f32 { return v - floor(v); }
+// The permutation hash (34v + 1)v mod 289 of tf/noise.ts: exact in float32, so the same on every GPU.
+fn mod289(v: f32) -> f32 { return v - floor((v + 0.5) / 289.0) * 289.0; }
+fn permute(v: f32) -> f32 { return mod289(mod289(v * 34.0 + 1.0) * v); }
 fn hash2(a: f32, b: f32) -> f32 {
-  let s = sin(a * 127.1 + b * 311.7) * 43758.5453;
-  return s - floor(s);
+  return permute(mod289(permute(mod289(a)) + mod289(b))) / 289.0;
 }
 fn hash3(a: f32, b: f32, c: f32) -> f32 {
-  let s = sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453;
-  return s - floor(s);
+  return permute(mod289(permute(mod289(permute(mod289(a)) + mod289(b))) + mod289(c))) / 289.0;
 }
 fn smoothstep3(t: f32) -> f32 { return t * t * (t * -2.0 + 3.0); }
 fn lerp(a: f32, b: f32, t: f32) -> f32 { return a + (b - a) * t; }

@@ -2,7 +2,9 @@ import * as tf from '@tensorflow/tfjs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { CHUNK_VOLUME } from '../src/constants';
 import { generateChunks } from '../src/tf/worldgen';
-import { generateChunkJs } from '../src/world/jsWorldgen';
+import { SAND_ABOVE } from '../src/world/worldgenParams';
+import { SEA_LEVEL } from '../src/constants';
+import { generateChunkJs, spawnPoint, terrainHeightAt } from '../src/world/jsWorldgen';
 
 beforeAll(async () => {
   await tf.setBackend('cpu');
@@ -18,6 +20,13 @@ describe('plain-JS world generation', () => {
       for (let i = 0; i < CHUNK_VOLUME; i++) if (js[i] !== ref[k][i]) differ++;
     });
     expect(differ).toBe(0); // (float32 throughout, as TF.js on the CPU)
+  });
+
+  it('starts new players on dry land, not beach or sea', () => {
+    const [x, y, z] = spawnPoint();
+    const h = terrainHeightAt(Math.floor(x), Math.floor(z));
+    expect(h).toBeGreaterThan(SEA_LEVEL + SAND_ABOVE);
+    expect(y).toBe(h + 3);
   });
 
   it('is quick enough to run a chunk or two a frame', () => {
