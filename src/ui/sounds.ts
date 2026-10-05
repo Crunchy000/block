@@ -1,3 +1,4 @@
+import { assetUrl } from '../assetUrl';
 import { Block } from '../constants';
 
 /**
@@ -73,7 +74,7 @@ export class Sounds {
       const d = this.noise.getChannelData(0);
       for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
       for (const file of FILES) {
-        fetch(new URL(`sounds/${file}.mp3`, document.baseURI))
+        fetch(assetUrl(`sounds/${file}.mp3`))
           .then((r) => r.arrayBuffer())
           .then((data) => this.ctx!.decodeAudioData(data))
           .then((buffer) => this.samples.set(file, buffer))

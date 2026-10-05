@@ -1,3 +1,5 @@
+import { assetUrl } from '../assetUrl';
+
 /**
  * An animated, textured model for mobs (made by scripts/convert-models.mjs; see there for the
  * file layout): vertices with positions in their part's space, normals, texture coordinates
@@ -51,7 +53,7 @@ export function poseFrames(model: Pick<MobModel, 'clips' | 'fps'>, clip: string,
   return [c.start + k, c.start + k + 1, f - k];
 }
 
-const url = (path: string) => new URL(path, document.baseURI).toString();
+const url = assetUrl;
 
 /** A model as fetched, before a renderer uploads it: its parsed file and its texture's image. */
 export type MobModelData = ReturnType<typeof parseModel> & { image: ImageBitmap };

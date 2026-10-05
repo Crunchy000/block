@@ -1,3 +1,5 @@
+import { assetUrl } from '../assetUrl';
+
 /**
  * Block textures: "Baunilha" by Mirtilo (CC BY-SA 4.0), a texture pack for Luanti, as layers
  * of one 16 x 16 texture array with mipmaps. scripts/convert-textures.mjs builds the file,
@@ -55,7 +57,7 @@ export interface BlockTextureData { count: number; levels: Uint8Array<ArrayBuffe
 
 /** Fetch the block textures and make their mipmaps (for a renderer to upload as a texture array). */
 export async function fetchBlockTextures(): Promise<BlockTextureData> {
-  const r = await fetch(new URL('textures/blocks.bin', document.baseURI));
+  const r = await fetch(assetUrl('textures/blocks.bin'));
   if (!r.ok) throw new Error(`textures/blocks.bin: ${r.status}`);
   const file = await r.arrayBuffer();
   const count = new Uint32Array(file, 0, 1)[0];

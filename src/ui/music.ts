@@ -1,3 +1,5 @@
+import { assetUrl } from '../assetUrl';
+
 /**
  * Background music: one track, looped, quiet, faded in and out. It plays while the game is
  * being played (browsers only let pages start sound from a click or tap, so it starts with
@@ -19,7 +21,7 @@ export class Music {
     this.audio.loop = true;
     this.audio.preload = 'none';
     this.audio.volume = 0;
-    this.audio.src = new URL(src, document.baseURI).toString();
+    this.audio.src = assetUrl(src);
     let stored: string | null = null;
     try { stored = localStorage.getItem(MUSIC_KEY); } catch { /* storage blocked */ }
     this.enabled = stored !== '0';

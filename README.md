@@ -116,6 +116,12 @@ hills and coastlines through the haze. The other looks are a near-black silhouet
 plain colour (grass, bare slopes and sea with the blocks' lighting, fog pushed out to 2 km). It isn't drawn where real chunks are drawn and faded in (a one-byte-a-chunk coverage map): chunks still loading leave it in place, so the edge of the loaded area never shows sky. A chunk that arrives dissolves in over it in 0.6 s (pixels appearing in a 4 × 4 ordered-dither pattern, so no sorting), the far terrain sitting 0.3 blocks lower so the two don't flicker against each other; edits don't fade again. It has no caves, plants or edits, only the shape of
 the land, and plain vertex buffers, so safe mode shows it too (`src/world/farTerrain.ts`).
 
+**Cache busting:** the bundled scripts have content hashes in their names; the files in `public/` (textures,
+models, sounds, music, `log.js`) are loaded with `?v=<build>` (`src/assetUrl.ts`, and a Vite plugin for `log.js`), so a
+new build's are fetched rather than old cached copies. Each build also writes `version.json`; the game fetches it past
+every cache when it starts, and if a newer build is deployed than the (cached) page, reloads into it with `?v=<build>`
+in the URL.
+
 **Saving:** what you build and dig (and water, grass and wheat that have changed) is kept between visits. Edited
 chunks are saved in the browser's IndexedDB (`src/world/worldSave.ts`), one record per chunk that differs from the
 generated world: when it leaves the loaded area, every 10 seconds, and when the page is hidden or closed. Chunks with

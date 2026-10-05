@@ -1,5 +1,6 @@
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import type { Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 
 /** The commit a build is from, shown in the page log. */
@@ -12,8 +13,26 @@ function buildId(): string {
   }
 }
 
+const BUILD = buildId();
+
+/**
+ * Cache busting: each build writes version.json (the page checks it, past every cache, and
+ * reloads into a newer build: src/assetUrl.ts), and the pages load public/log.js with the
+ * build in its URL. (The bundled scripts already have content hashes in their names.)
+ */
+function cacheBusting(): Plugin {
+  return {
+    name: 'cache-busting',
+    transformIndexHtml: (html) => html.replace(/src="\.\/log\.js"/g, `src="./log.js?v=${BUILD}"`),
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: BUILD }) });
+    },
+  };
+}
+
 export default defineConfig({
-  define: { __BUILD__: JSON.stringify(buildId()) },
+  define: { __BUILD__: JSON.stringify(BUILD) },
+  plugins: [cacheBusting()],
   // Relative asset URLs so the build works under a GitHub Pages project path (/<repo>/).
   base: './',
   build: {
