@@ -118,9 +118,10 @@ the land, and plain vertex buffers, so safe mode shows it too (`src/world/farTer
 
 **Cache busting:** the bundled scripts have content hashes in their names; the files in `public/` (textures,
 models, sounds, music, `log.js`) are loaded with `?v=<build>` (`src/assetUrl.ts`, and a Vite plugin for `log.js`), so a
-new build's are fetched rather than old cached copies. Each build also writes `version.json`; the game fetches it past
-every cache when it starts, and if a newer build is deployed than the (cached) page, reloads into it with `?v=<build>`
-in the URL.
+new build's are fetched rather than old cached copies. Each build also writes `version.json`, and every page's first
+script (inline in its HTML, from `vite.config.ts`) fetches it past every cache: if a newer build is deployed than the
+page (GitHub Pages lets browsers keep a page's HTML for 10 minutes), it reloads into it with `?v=<build>` in the URL,
+a URL the browser hasn't cached. Inline, so it works even when a cached page names scripts the new deploy removed.
 
 **Saving:** what you build and dig (and water, grass and wheat that have changed) is kept between visits. Edited
 chunks are saved in the browser's IndexedDB (`src/world/worldSave.ts`), one record per chunk that differs from the

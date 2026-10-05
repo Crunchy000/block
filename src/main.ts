@@ -2,7 +2,6 @@ import * as tf from '@tensorflow/tfjs';
 import {
   ACTIVE_RADIUS, BUILDING_BLOCKS, Block, CHUNK_HEIGHT, CHUNK_SIZE, CHUNK_VOLUME, DEFAULT_RATES, cell,
 } from './constants';
-import { reloadIfOutdated } from './assetUrl';
 import { log, logError } from './log';
 import { Controls } from './player/controls';
 import { Digging } from './player/digging';
@@ -144,8 +143,6 @@ async function main(): Promise<void> {
   let worldReady = false;
 
   log.info(`Block build ${__BUILD__}`);
-  // A newer build deployed than this (cached) page: load that instead.
-  if (await reloadIfOutdated()) return;
   setStatus('Starting the graphics…');
   const params = new URLSearchParams(location.search);
   // 4x MSAA smooths block edges (?msaa=0 turns it off).
