@@ -25,6 +25,9 @@ export class Chunk {
   shownAt = 0;
   /** Edited or simulated since generation: saved when it leaves the halo, restored when it comes back. */
   modified = false;
+  /** Counts changes to its own cells; `persisted` is the count last written to the world save (world/worldSave.ts). */
+  changes = 0;
+  persisted = 0;
 
   constructor(readonly cx: number, readonly cz: number, readonly slot: number) {
     this.key = chunkKey(cx, cz);

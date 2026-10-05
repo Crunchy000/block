@@ -4,6 +4,7 @@ import {
 import { AROUND, ringSize, slotOf, type CellStore, type MeshTarget } from '../sim/store';
 import type { ChunkCoord } from '../tf/worldgen';
 import { Chunk, type ChunkState } from './chunk';
+import type { WorldSave } from './worldSave';
 
 /** Bit flags for which chunk borders a change touched. */
 export const enum Border {
@@ -33,6 +34,9 @@ export interface ChunkDraw {
   meshSlot: number;
   center: [number, number, number];
 }
+
+/** A chunk the world save listed but didn't have. */
+const NOT_SAVED = Symbol('not saved');
 
 /** Mesh slots for a view radius: one per chunk in view. */
 export const meshSlotCount = (viewRadius: number) => (2 * viewRadius + 1) ** 2;
@@ -79,11 +83,13 @@ export class World {
   /**
    * activeRadius: chunks simulated by block updates. viewRadius: chunks drawn (at least
    * activeRadius). ghostRadius: chunks loaded, one ring past the view, so meshes at its
-   * edge and block updates at the active edge have their neighbours' cells.
+   * edge and block updates at the active edge have their neighbours' cells. `save`: where
+   * edited chunks are kept between visits (world/worldSave.ts), if anywhere; chunks it has
+   * are restored from it rather than generated.
    */
   constructor(
     readonly store: CellStore, readonly activeRadius = ACTIVE_RADIUS, readonly ghostRadius = GHOST_RADIUS,
-    readonly viewRadius = activeRadius,
+    readonly viewRadius = activeRadius, readonly save?: WorldSave,
   ) {
     if (viewRadius < activeRadius || ghostRadius <= viewRadius) throw new Error('need activeRadius <= viewRadius < ghostRadius');
     this.ring = ringSize(ghostRadius);
@@ -158,7 +164,7 @@ export class World {
     this.slots[chunk.slot] = chunk;
     this.chunks.set(chunk.key, chunk);
     this.store.setSlot(chunk.slot, cx, cz, false);
-    const saved = this.saved.get(chunk.key);
+    const saved = this.saved.get(chunk.key) ?? (this.save?.keys.has(chunk.key) ? this.fromSave(chunk) : undefined);
     if (!saved) return; // generated (see missingChunks)
     // Been here before and edited: restore it rather than generating it again.
     this.saved.delete(chunk.key);
@@ -172,16 +178,28 @@ export class World {
       chunk.modified = true;
       this.markLoaded(chunk);
     }, (e: unknown) => {
+      if (e === NOT_SAVED) { chunk.loading = false; return; } // generate it after all
       console.warn(`lost the edits to chunk ${chunk.key}`, e);
       chunk.loading = false; // generate it afresh
     });
   }
 
+  /** A chunk's cells from the world save (rejects with NOT_SAVED if it isn't there after all). */
+  private fromSave(chunk: Chunk): Promise<Uint8Array> {
+    return this.save!.load(chunk.key).then((cells) => cells ?? Promise.reject(NOT_SAVED));
+  }
+
   private unload(chunk: Chunk): void {
-    // Pristine chunks regenerate identically; edited ones are read back and kept.
+    // Pristine chunks regenerate identically; edited ones are read back and kept (and saved
+    // for later visits if they changed since they were last saved).
     // (The read is queued now, before anything can write the slot's next chunk.)
     if (chunk.loaded && chunk.modified) {
-      this.saved.set(chunk.key, this.store.readChunk(chunk.slot).then((cells) => Uint8Array.from(cells)));
+      const cells = this.store.readChunk(chunk.slot).then((c) => Uint8Array.from(c));
+      this.saved.set(chunk.key, cells);
+      if (this.save && chunk.changes !== chunk.persisted) {
+        const save = this.save;
+        cells.then((c) => save.save(chunk.key, c)).catch((e: unknown) => console.warn(`couldn't save chunk ${chunk.key}`, e));
+      }
     }
     this.setState(chunk, 'ghost');
     this.setInView(chunk, false);
@@ -342,6 +360,7 @@ export class World {
    */
   markChanged(chunk: Chunk, borders: number): void {
     chunk.version++;
+    chunk.changes++;
     this.touch(chunk);
     chunk.modified = true;
     this.awake.add(chunk);
@@ -364,6 +383,23 @@ export class World {
       this.touch(c);
     }
     this.awake.add(c);
+  }
+
+  /**
+   * Write the loaded chunks that changed since they were last saved to the world save (every
+   * so often, and when the page is hidden). Resolves to how many it saved.
+   */
+  async persist(): Promise<number> {
+    const save = this.save;
+    if (!save) return 0;
+    const todo = [...this.chunks.values()].filter((c) => c.loaded && c.modified && c.changes !== c.persisted);
+    await Promise.all(todo.map(async (c) => {
+      const changes = c.changes;
+      const cells = Uint8Array.from(await this.store.readChunk(c.slot));
+      await save.save(c.key, cells);
+      c.persisted = changes;
+    }));
+    return todo.length;
   }
 
   /** Active, loaded chunks that need a block-update tick. Clears the awake set. */

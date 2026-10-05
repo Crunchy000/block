@@ -30,6 +30,7 @@ import { Animals, SPECIES, type PoseFrames } from './world/animals';
 import { FarTerrain, SEA_SURFACE } from './world/farTerrain';
 import { farHeightsJs, WorldgenWorker } from './world/jsWorldgen';
 import { generateMissing, generateMissingJs } from './world/loader';
+import { WorldSave } from './world/worldSave';
 import { World, meshSlotCount } from './world/world';
 
 const TICK_MS = 200;          // block-update rate (5 ticks / second)
@@ -232,7 +233,11 @@ async function main(): Promise<void> {
       .finally(() => { switching = false; });
   };
 
-  const world = new World(store, activeRadius, ghostRadius, viewRadius);
+  // Edits are kept between visits (IndexedDB), per world: safe mode's generates differently from WebGPU's.
+  const worldName = safe ? 'safe' : 'webgpu';
+  const save = await WorldSave.open(worldName);
+  log.info(save ? `World save: ${save.keys.size} edited chunks (${worldName})` : 'World save: unavailable (edits last until the page closes)');
+  const world = new World(store, activeRadius, ghostRadius, viewRadius, save);
   // ?spread= / ?grow= tune the per-tick chances of grass spreading (default 1/16; 0 stops it)
   // and wheat growing a stage (default 1/40, and 1/12 next to water; ?grow= sets both).
   const chance = (name: string) => Math.min(1, Math.max(0, Number(params.get(name))));
@@ -243,9 +248,16 @@ async function main(): Promise<void> {
   });
   // Optional URL params: ?pos=x,y,z&yaw=rad&pitch=rad&chunks (outlines on)&radius=N&spread=&grow=&offscreen&cpu&fly (start flying)&msaa=0&safe (or webgl: WebGL2, the world on the CPU)
   // (Safe mode's world differs in its details, and the usual start is in the sea there: it starts on land.)
-  const pos = (params.get('pos') ?? (safe ? '9,35,129' : '8,52,8')).split(',').map(Number) as [number, number, number];
+  // Where the player was last time in this world, else the start (safe mode's world differs in its
+  // details, and the usual start is in the sea there: it starts on land).
+  const PLAYER_KEY = `block.player.${worldName}`;
+  let lastVisit: number[] | undefined;
+  try { lastVisit = localStorage.getItem(PLAYER_KEY)?.split(',').map(Number); } catch { /* storage blocked */ }
+  if (lastVisit && (lastVisit.length !== 4 || lastVisit.some((v) => !Number.isFinite(v)))) lastVisit = undefined;
+  const pos = (params.get('pos')?.split(',').map(Number) ?? lastVisit?.slice(0, 3) ?? (safe ? [9, 35, 129] : [8, 52, 8])) as [number, number, number];
   const controls = new Controls(canvas, pos);
   controls.flying = params.has('fly');
+  if (lastVisit && !params.has('pos')) controls.yaw = lastVisit[3];
   if (params.has('yaw')) controls.yaw = Number(params.get('yaw'));
   if (params.has('pitch')) controls.pitch = Number(params.get('pitch'));
   controls.onLockError = (message) => {
@@ -320,7 +332,7 @@ async function main(): Promise<void> {
   touchUI.setToggle('KeyG', showChunks);
   touchUI.setToggle('KeyF', controls.flying);
 
-  // Diamonds mined (kept between visits, though edits to the world aren't yet).
+  // Diamonds mined (kept between visits, as the world's edits are).
   const DIAMONDS_KEY = 'block.diamonds';
   let diamonds = 0;
   try { diamonds = Math.max(0, Number(localStorage.getItem(DIAMONDS_KEY)) || 0); } catch { /* storage blocked */ }
@@ -638,6 +650,27 @@ async function main(): Promise<void> {
       ...(lastError ? [`error: ${lastError}`] : []),
     ].join('\n');
   };
+  // Save the edited chunks and where the player is every 10 s, and when the page is hidden (closed,
+  // switched away from, or the phone locked).
+  let saving = true; // (not while starting a new world)
+  const saveNow = () => {
+    if (!saving) return;
+    world.persist().catch((e: unknown) => logError('Saving the world failed', e));
+    const p = controls.position;
+    try { localStorage.setItem(PLAYER_KEY, [p[0], p[1], p[2], controls.yaw].map((v) => v.toFixed(2)).join(',')); } catch { /* storage blocked */ }
+  };
+  window.setInterval(saveNow, 10000);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); });
+  window.addEventListener('pagehide', saveNow);
+  // New world: forget this world's edits and where the player was, and start again.
+  $('new-world').addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!confirm('Start a new world? Everything built and dug here will be gone.')) return;
+    saving = false;
+    try { localStorage.removeItem(PLAYER_KEY); } catch { /* storage blocked */ }
+    WorldSave.clear(worldName).catch(() => {}).finally(() => location.reload());
+  });
+
   requestAnimationFrame(frame);
 }
 

@@ -9,6 +9,7 @@ import { ringSize, slotOf } from '../src/sim/store';
 import { blockUpdateReference, cellRandom } from '../src/tf/blockUpdateReference';
 import { mulberry32, randomCells } from '../src/tf/kernelCheck';
 import { World } from '../src/world/world';
+import type { WorldSave } from '../src/world/worldSave';
 
 const newWorld = (activeRadius: number, ghostRadius: number) =>
   new World(new CpuStore(ringSize(ghostRadius)), activeRadius, ghostRadius);
@@ -95,6 +96,39 @@ describe('active area + ghost halo', () => {
     expect(world.savedCount()).toBe(0);
     expect(await blockAt(world, -CHUNK_SIZE * 2 + 3, 5, 7)).toBe(Block.Dirt);
     expect(world.haloReady()).toBe(true);
+  });
+
+  it('keeps edited chunks in the world save between visits, restoring them instead of generating', async () => {
+    // A stand-in for the IndexedDB save (world/worldSave.ts).
+    const records = new Map<string, Uint8Array>();
+    const save = {
+      keys: new Set<string>(),
+      load: async (key: string) => records.get(key),
+      save: async (key: string, cells: Uint8Array) => { save.keys.add(key); records.set(key, cells); },
+    } as unknown as WorldSave;
+    const first = new World(new CpuStore(ringSize(2)), 1, 2, 1, save);
+    fill(first);
+    first.setCell(3, 5, 7, cell(Block.Dirt)); // chunk (0, 0), in view
+    first.setCell(-CHUNK_SIZE * 2 + 3, 6, 7, cell(Block.Dirt)); // chunk (-2, 0), about to leave
+    first.recenter(CHUNK_SIZE * 2 + 8, 8); // (-2, 0) leaves (saved as it goes); (0, 0) stays
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(records.has('-2,0')).toBe(true);
+    expect(await first.persist()).toBe(1); // (0, 0): saved when asked
+    expect(await first.persist()).toBe(0); // nothing changed since
+    expect([...records.keys()].sort()).toEqual(['-2,0', '0,0']);
+
+    // Next visit: a new world, the same save.
+    const second = new World(new CpuStore(ringSize(2)), 1, 2, 1, save);
+    expect(second.missingChunks(100).some((c) => c.cx === 0 && c.cz === 0)).toBe(false);
+    fill(second);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await blockAt(second, 3, 5, 7)).toBe(Block.Dirt);
+    expect(second.getChunk(0, 0)!.modified).toBe(true);
+    second.recenter(-CHUNK_SIZE * 2 + 8, 8);
+    fill(second);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await blockAt(second, -CHUNK_SIZE * 2 + 3, 6, 7)).toBe(Block.Dirt);
+    expect(await second.persist()).toBe(0); // restored, not changed: nothing to save again
   });
 });
 

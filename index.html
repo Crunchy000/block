@@ -37,6 +37,7 @@
       .credits a { color: inherit; }
       .bench-link { display: inline-block; margin-top: 16px; padding: 7px 16px; border: 1px solid rgba(255,255,255,.45); border-radius: 8px; color: #fff; text-decoration: none; font-size: 13px; }
       .bench-link:hover, .bench-link:focus-visible { background: rgba(255,255,255,.15); }
+      button.bench-link { background: none; font: inherit; font-size: 13px; cursor: pointer; margin-left: 8px; }
       .view-distance { margin-top: 14px; font-size: 13px; }
       .view-distance button { min-width: 40px; padding: 6px 10px; margin: 0 2px; border-radius: 8px; border: 1px solid rgba(255,255,255,.45); background: rgba(0,0,0,.3); color: #fff; font: inherit; cursor: pointer; }
       .view-distance button.chosen { background: #fff; color: #000; }
@@ -113,6 +114,7 @@
         <!-- (Also, by URL only: bench.html?start benchmarks block updates on this device, log.html shows earlier
              visits' logs, and ?log adds a Log button to the game.) -->
         <a id="safe-link" class="bench-link" href="./?safe">Safe mode (WebGL2: if the game crashes on this device)</a>
+        <button id="new-world" type="button" class="bench-link">New world</button>
         <div id="credits" class="credits">Animals: <a href="https://kenney.nl/assets/cube-pets">"Cube Pets"</a>
           by <a href="https://www.kenney.nl">Kenney</a> (CC0)
           · Block textures: <a href="https://content.luanti.org/packages/Mirtilo/baunilha/">"Baunilha"</a> by Mirtilo,
