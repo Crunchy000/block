@@ -19,6 +19,12 @@ Space jump (and swim up) · double-tap W, or hold Ctrl, to run · `F` fly (throu
 Ctrl to fly faster) · left click break · right click place ·
 `1`–`8` pastel concrete colours · `M` music on/off · `N` sounds on/off · `G` chunk / ghost-halo outlines · `P` pause block updates.
 
+**Gamepad** (`src/player/gamepad.ts`, the browser's Gamepad API, Xbox / PlayStation layout), in every mode:
+left stick walk (click it in to run) · right stick look (eased for fine aim) · RT dig (hold) · LT place · A jump / swim /
+fly up · B fly down · Y fly on / off · LB / RB or d-pad left / right choose a block · Start back to the start screen.
+Any button on the start screen starts play (no mouse capture needed), and the start screen lists the buttons once a
+gamepad is connected.
+
 **Animals:** up to 10 wander the grass around you: cows, pigs, chickens, rabbits, cats, dogs, deer and foxes
 ("Cube Pets" by [Kenney](https://www.kenney.nl), CC0; credited on the start screen too). They spawn on grass 8–20
 blocks away, stroll, stand about (looking around, or grazing), turn, hop up steps (rabbits hop all the time), and swim: in water they float a little over half

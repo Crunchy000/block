@@ -271,6 +271,16 @@ async function main(): Promise<void> {
   // Sound effects (N or the touch Sounds button switch them off).
   const sounds = new Sounds();
   touchUI.setToggle('KeyN', sounds.enabled);
+  // A gamepad button on the start screen starts play, as a click does: the sound starts with it.
+  controls.onGamepadStart = () => {
+    music.setPlaying(true);
+    sounds.unlock();
+  };
+  // The start screen's help shows the gamepad's buttons once one is connected.
+  window.addEventListener('gamepadconnected', (e) => {
+    document.body.classList.add('gamepad');
+    log.info(`Gamepad connected: ${e.gamepad.id} (${e.gamepad.mapping || 'non-standard'} layout)`);
+  });
   controls.onPlayingChange = (playing) => {
     music.setPlaying(playing);
     overlay.classList.toggle('hidden', playing);
@@ -428,7 +438,9 @@ async function main(): Promise<void> {
   const handleInput = () => {
     for (const key of controls.takeKeyPresses()) {
       const slot = /^Digit([1-9])$/.exec(key);
-      const index = slot ? Number(slot[1]) - 1 : -1;
+      // (A gamepad's bumpers step through the hotbar, wrapping round.)
+      const n = BUILDING_BLOCKS.length;
+      const index = slot ? Number(slot[1]) - 1 : key === 'HotbarNext' ? (selected + 1) % n : key === 'HotbarPrev' ? (selected + n - 1) % n : -1;
       if (index >= 0 && index < BUILDING_BLOCKS.length) {
         selected = index;
         hotbar.setSelected(selected);
@@ -578,6 +590,7 @@ async function main(): Promise<void> {
       feet: [controls.position[0], controls.position[1] - EYE_HEIGHT, controls.position[2]],
     };
     controls.update(dt, nearby && ((x, y, z) => nearby!.at(x, y, z)));
+    if (controls.gamepad.seen) document.body.classList.add('gamepad'); // (the help shows its buttons)
     bodySounds(was);
     sounds.setListener({ position: controls.position, yaw: controls.yaw });
     const [px, py, pz] = controls.position;

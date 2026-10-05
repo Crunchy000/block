@@ -1,16 +1,21 @@
 import { forward } from '../render/math';
+import { Button, GamepadInput } from './gamepad';
 import { Body, EYE_HEIGHT } from './physics';
 
 const MOUSE_LOOK_SPEED = 0.0025; // radians per mouse count
 const MAX_PITCH = 1.55;
+/** Turning with a gamepad's right stick pushed all the way, radians a second (sideways, up / down). */
+const PAD_YAW_SPEED = 3.2;
+const PAD_PITCH_SPEED = 2.2;
 
 /** Sprinting while flying moves this many times faster. */
 const SPRINT = 4;
 
 /**
  * First-person player: walking, running and jumping with collisions (player/physics.ts),
- * or flying freely through everything. Played either with mouse + keyboard (pointer
- * lock) or, on touch screens, through TouchControls, which feeds the touch* fields.
+ * or flying freely through everything. Played with mouse + keyboard (pointer lock), on touch
+ * screens through TouchControls (which feeds the touch* fields), or with a gamepad
+ * (player/gamepad.ts, read each update).
  */
 export class Controls {
   position: [number, number, number];
@@ -25,6 +30,14 @@ export class Controls {
   locked = false;
   /** Playing with on-screen touch controls instead of pointer lock. */
   touchPlaying = false;
+  /** Playing with a gamepad (started from it: no pointer lock needed). */
+  padPlaying = false;
+  readonly gamepad = new GamepadInput();
+  /** The gamepad's walking, flying up / down, digging and running (clicked left stick, until it's let go). */
+  private padMove = { right: 0, forward: 0 };
+  private padVertical = 0;
+  private padDig = false;
+  private padRun = false;
 
   /** Touch stick, analog: strafe right / forward in [-1, 1]. */
   touchMove = { right: 0, forward: 0 };
@@ -36,8 +49,10 @@ export class Controls {
 
   /** Called when the browser refuses pointer lock (e.g. clicking again too soon after Esc). */
   onLockError?: (message: string) => void;
-  /** Called when play starts or stops (pointer lock or touch mode). */
+  /** Called when play starts or stops (pointer lock, touch or gamepad). */
   onPlayingChange?: (playing: boolean) => void;
+  /** Called when a gamepad button starts play (as a click on the start screen would: start the sound). */
+  onGamepadStart?: () => void;
 
   private keys = new Set<string>();
   /** Left mouse button held (with the mouse captured). */
@@ -88,13 +103,58 @@ export class Controls {
     });
   }
 
-  /** Digging: the left mouse button or the touch Break button held down. */
+  /** Digging: the left mouse button, the touch Break button or the right trigger held down. */
   get digging(): boolean {
-    return this.mouseDig || this.touchDig;
+    return this.mouseDig || this.touchDig || this.padDig;
   }
 
   get playing(): boolean {
-    return this.locked || this.touchPlaying;
+    return this.locked || this.touchPlaying || this.padPlaying;
+  }
+
+  /** Back to the start screen from however play was started. */
+  stop(): void {
+    if (this.locked) document.exitPointerLock();
+    if (this.touchPlaying) this.stopTouch();
+    if (this.padPlaying) {
+      this.padPlaying = false;
+      this.onPlayingChange?.(this.playing);
+    }
+  }
+
+  /**
+   * Read the gamepad: on the start screen any button starts play; while playing, the sticks walk
+   * and look, the triggers dig and place, and the buttons jump, fly and pick hotbar blocks.
+   */
+  private pollGamepad(dt: number): void {
+    const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
+    const pad = this.gamepad.read(pads);
+    this.padMove = { right: 0, forward: 0 };
+    this.padVertical = 0;
+    this.padDig = false;
+    if (!pad) return;
+    if (!this.playing) {
+      if (pad.pressed.size > 0) {
+        this.padPlaying = true;
+        this.onGamepadStart?.();
+        this.onPlayingChange?.(this.playing);
+      }
+      return;
+    }
+    if (pad.pressed.has(Button.Start)) {
+      this.stop();
+      return;
+    }
+    this.padMove = pad.move;
+    if (pad.pressed.has(Button.LeftStick)) this.padRun = true;
+    if (pad.move.right === 0 && pad.move.forward === 0) this.padRun = false;
+    this.rotate(pad.look.x * PAD_YAW_SPEED * dt, pad.look.y * PAD_PITCH_SPEED * dt);
+    this.padVertical = (pad.held.has(Button.A) ? 1 : 0) - (pad.held.has(Button.B) ? 1 : 0);
+    this.padDig = pad.held.has(Button.RT);
+    if (pad.pressed.has(Button.LT)) this.clicks.push(2);
+    if (pad.pressed.has(Button.Y)) this.keyPresses.push('KeyF');
+    if (pad.pressed.has(Button.LB) || pad.pressed.has(Button.Left)) this.keyPresses.push('HotbarPrev');
+    if (pad.pressed.has(Button.RB) || pad.pressed.has(Button.Right)) this.keyPresses.push('HotbarNext');
   }
 
   /** Start playing from the start screen: touch and pen get on-screen controls, a mouse gets pointer lock. */
@@ -171,16 +231,18 @@ export class Controls {
    * world's readBox); without them it waits.
    */
   update(dt: number, typeAt?: (x: number, y: number, z: number) => number): void {
+    this.pollGamepad(dt);
     const k = this.keys;
-    // Input in camera space: keys are digital, the touch stick is analog.
-    let right = this.touchMove.right, fwd = this.touchMove.forward, up = this.touchVertical;
+    // Input in camera space: keys are digital, the touch and gamepad sticks analog.
+    let right = this.touchMove.right + this.padMove.right, fwd = this.touchMove.forward + this.padMove.forward;
+    let up = this.touchVertical + this.padVertical;
     if (k.has('KeyW')) fwd += 1;
     if (k.has('KeyS')) fwd -= 1;
     if (k.has('KeyD')) right += 1;
     if (k.has('KeyA')) right -= 1;
     if (k.has('Space')) up += 1;
     if (k.has('ShiftLeft') || k.has('ShiftRight')) up -= 1;
-    const sprint = k.has('ControlLeft') || k.has('ControlRight') || this.runLatch || this.touchSprint;
+    const sprint = k.has('ControlLeft') || k.has('ControlRight') || this.runLatch || this.touchSprint || this.padRun;
 
     if (!this.flying) {
       if (!typeAt) return;
